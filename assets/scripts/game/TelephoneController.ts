@@ -1,4 +1,5 @@
 import { _decorator, Button, Color, Component, Graphics, Label, Node, Sprite, Tween, Vec3, tween } from 'cc';
+import { AudioManager } from '../audio/AudioManager';
 
 const { ccclass } = _decorator;
 
@@ -569,11 +570,13 @@ export class TelephoneController extends Component {
     if (this.phoneNumber.length >= this.activePhoneNumberLength) {
       return;
     }
+    AudioManager.getInstance()?.playCachedPhoneDial();
     this.phoneNumber += character;
     this.refreshPhoneNumberDisplay();
   }
 
   private removeLastPhoneCharacter(): void {
+    // Backspace is not a digit key; no dial SFX.
     if (this.emergencyMode && this.emergencyStatusVisible) {
       this.resetDialInput();
       return;

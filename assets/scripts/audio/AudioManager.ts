@@ -442,6 +442,44 @@ export class AudioManager extends Component {
   }
 
   /**
+   * Play phone dial SFX using a pre-cached AudioClip only.
+   * If the clip is not cached yet, skips silently (never late catch-up playback).
+   */
+  public playCachedPhoneDial(): void {
+    if (!this.soundEnabled) {
+      return;
+    }
+    const source = this.sfxSource;
+    if (!source?.isValid) {
+      return;
+    }
+    const clip = this.clipCache.get(GameAudioCatalog.PhoneDialId);
+    if (!clip) {
+      return;
+    }
+    source.playOneShot(clip, 1);
+  }
+
+  /**
+   * Play phone connected SFX using a pre-cached AudioClip only.
+   * If the clip is not cached yet, skips silently (never late catch-up playback).
+   */
+  public playCachedPhoneConnected(): void {
+    if (!this.soundEnabled) {
+      return;
+    }
+    const source = this.sfxSource;
+    if (!source?.isValid) {
+      return;
+    }
+    const clip = this.clipCache.get(GameAudioCatalog.PhoneConnectedId);
+    if (!clip) {
+      return;
+    }
+    source.playOneShot(clip, 1);
+  }
+
+  /**
    * Start looping alarm on the dedicated alarm AudioSource.
    * No-op if already playing or Sound Effects are off.
    */
@@ -559,13 +597,15 @@ export class AudioManager extends Component {
   };
 
   private preloadCoreClips(): void {
-    // Warm Settings click, document flip, shutter/alarm/drawer, and BGM before interactions.
+    // Warm Settings click, document flip, shutter/alarm/drawer/phone, and BGM before interactions.
     // loadClip deduplicates in-flight requests via loadingClips.
     void this.loadClip(GameAudioCatalog.SettingsClickId);
     void this.loadClip(GameAudioCatalog.DocumentFlipId);
     void this.loadClip(GameAudioCatalog.ShutterMoveId);
     void this.loadClip(GameAudioCatalog.AlarmId);
     void this.loadClip(GameAudioCatalog.DrawerMoveId);
+    void this.loadClip(GameAudioCatalog.PhoneDialId);
+    void this.loadClip(GameAudioCatalog.PhoneConnectedId);
     void this.loadClip(GameAudioCatalog.DefaultMusicId);
   }
 

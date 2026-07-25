@@ -2684,6 +2684,7 @@ export class EvidencePreviewController extends Component {
     if (this.cleanupProgramActivated || this.phoneEmergencyResolved) {
       return;
     }
+    AudioManager.getInstance()?.playCachedPhoneConnected();
     this.cleanupProgramActivated = true;
     this.phoneEmergencyResolved = true;
     this.phoneResponseWindowOpen = false;
