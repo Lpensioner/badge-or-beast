@@ -693,6 +693,8 @@ export class EmployeeFilesController extends Component {
       return;
     }
 
+    AudioManager.getInstance()?.playCachedDrawerMove();
+
     this.isAnimating = true;
     this.currentOpenIndex = index;
     this.openVisuals[index].active = true;
@@ -725,6 +727,8 @@ export class EmployeeFilesController extends Component {
     if (!this.ready || this.isAnimating || this.isDestroying || !this.isControllerAlive()) {
       return;
     }
+
+    AudioManager.getInstance()?.playCachedDrawerMove();
 
     this.isAnimating = true;
     this.fileHits[index].active = false;

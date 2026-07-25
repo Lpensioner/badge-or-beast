@@ -10,6 +10,7 @@ import {
     UITransform,
     Vec3,
 } from 'cc';
+import { AudioManager } from '../audio/AudioManager';
 
 const { ccclass, property } = _decorator;
 
@@ -274,6 +275,8 @@ export class ShutterToggleController extends Component {
         }
 
         const targetClosed = !this.isClosedState;
+        // Play shared shutter move SFX after a valid click, before animation starts.
+        AudioManager.getInstance()?.playCachedShutterMove();
         this.animateTo(targetClosed, 0.34);
         if (targetClosed) {
             this.notifyUserCloseAccepted();
@@ -386,7 +389,10 @@ export class ShutterToggleController extends Component {
                 this.animationTargetClosed = null;
                 if (closed) {
                     this.shutterVisual?.setPosition(this.closedPosition);
+                    AudioManager.getInstance()?.startAlarmLoop();
                     this.notifyShutterClosedSettled();
+                } else {
+                    AudioManager.getInstance()?.stopAlarmLoop();
                 }
                 this.syncButtonInteractable();
                 if (closed && this.pendingDamagedVisual) {

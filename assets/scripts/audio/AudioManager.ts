@@ -46,6 +46,7 @@ export class AudioManager extends Component {
   private musicSource: AudioSource | null = null;
   private voiceSource: AudioSource | null = null;
   private sfxSource: AudioSource | null = null;
+  private alarmSource: AudioSource | null = null;
 
   private soundEnabled = DEFAULT_SETTINGS.soundEnabled;
   private musicEnabled = DEFAULT_SETTINGS.musicEnabled;
@@ -122,6 +123,7 @@ export class AudioManager extends Component {
     this.musicSource = null;
     this.voiceSource = null;
     this.sfxSource = null;
+    this.alarmSource = null;
     this.desiredMusicId = null;
     this.clipCache.clear();
     this.loadingClips.clear();
@@ -401,11 +403,105 @@ export class AudioManager extends Component {
     source.playOneShot(clip, 1);
   }
 
+  /**
+   * Play shutter move SFX using a pre-cached AudioClip only.
+   * Same clip for both open and close. Skips silently if not cached yet.
+   */
+  public playCachedShutterMove(): void {
+    if (!this.soundEnabled) {
+      return;
+    }
+    const source = this.sfxSource;
+    if (!source?.isValid) {
+      return;
+    }
+    const clip = this.clipCache.get(GameAudioCatalog.ShutterMoveId);
+    if (!clip) {
+      return;
+    }
+    source.playOneShot(clip, 1);
+  }
+
+  /**
+   * Play drawer move SFX using a pre-cached AudioClip only.
+   * Same clip for both open and close. Skips silently if not cached yet.
+   */
+  public playCachedDrawerMove(): void {
+    if (!this.soundEnabled) {
+      return;
+    }
+    const source = this.sfxSource;
+    if (!source?.isValid) {
+      return;
+    }
+    const clip = this.clipCache.get(GameAudioCatalog.DrawerMoveId);
+    if (!clip) {
+      return;
+    }
+    source.playOneShot(clip, 1);
+  }
+
+  /**
+   * Start looping alarm on the dedicated alarm AudioSource.
+   * No-op if already playing or Sound Effects are off.
+   */
+  public startAlarmLoop(): void {
+    if (!this.soundEnabled) {
+      return;
+    }
+    const source = this.alarmSource;
+    if (!source?.isValid) {
+      return;
+    }
+    if (source.playing && source.clip === this.clipCache.get(GameAudioCatalog.AlarmId)) {
+      return;
+    }
+
+    const cached = this.clipCache.get(GameAudioCatalog.AlarmId);
+    if (cached) {
+      this.applyAlarmClip(cached);
+      return;
+    }
+
+    this.loadClip(GameAudioCatalog.AlarmId)
+      .then((clip) => {
+        if (!this.isValid || !this.soundEnabled) {
+          return;
+        }
+        if (!this.alarmSource?.isValid) {
+          return;
+        }
+        if (!clip) {
+          console.error(
+            `[AudioManager] Failed to load alarm. id=${GameAudioCatalog.AlarmId}`,
+          );
+          return;
+        }
+        if (
+          this.alarmSource.playing &&
+          this.alarmSource.clip === clip
+        ) {
+          return;
+        }
+        this.applyAlarmClip(clip);
+      })
+      .catch((error: unknown) => {
+        console.error('[AudioManager] Unexpected alarm load error.', error);
+      });
+  }
+
+  public stopAlarmLoop(): void {
+    if (this.alarmSource?.isValid) {
+      this.alarmSource.stop();
+    }
+  }
+
   public stopAllSoundEffects(): void {
     // playOneShot instances are fire-and-forget in the public API; stop the shared source only.
     if (this.sfxSource?.isValid) {
       this.sfxSource.stop();
     }
+    this.stopAlarmLoop();
   }
 
   public isSettingsClickCached(): boolean {
@@ -463,11 +559,25 @@ export class AudioManager extends Component {
   };
 
   private preloadCoreClips(): void {
-    // Warm Settings click, document flip, and BGM before interactions.
+    // Warm Settings click, document flip, shutter/alarm/drawer, and BGM before interactions.
     // loadClip deduplicates in-flight requests via loadingClips.
     void this.loadClip(GameAudioCatalog.SettingsClickId);
     void this.loadClip(GameAudioCatalog.DocumentFlipId);
+    void this.loadClip(GameAudioCatalog.ShutterMoveId);
+    void this.loadClip(GameAudioCatalog.AlarmId);
+    void this.loadClip(GameAudioCatalog.DrawerMoveId);
     void this.loadClip(GameAudioCatalog.DefaultMusicId);
+  }
+
+  private applyAlarmClip(clip: AudioClip): void {
+    if (!this.alarmSource?.isValid) {
+      return;
+    }
+    this.alarmSource.stop();
+    this.alarmSource.clip = clip;
+    this.alarmSource.loop = true;
+    this.alarmSource.volume = VOLUME_SOUND_EFFECTS;
+    this.alarmSource.play();
   }
 
   private ensureAudioSources(): void {
@@ -500,6 +610,16 @@ export class AudioManager extends Component {
     this.sfxSource.playOnAwake = false;
     this.sfxSource.loop = false;
     this.sfxSource.volume = VOLUME_SOUND_EFFECTS;
+
+    let alarmNode = this.node.getChildByName('AlarmSource');
+    if (!alarmNode) {
+      alarmNode = new Node('AlarmSource');
+      this.node.addChild(alarmNode);
+    }
+    this.alarmSource = alarmNode.getComponent(AudioSource) ?? alarmNode.addComponent(AudioSource);
+    this.alarmSource.playOnAwake = false;
+    this.alarmSource.loop = true;
+    this.alarmSource.volume = VOLUME_SOUND_EFFECTS;
   }
 
   private loadClip(id: GameAudioId): Promise<AudioClip | null> {

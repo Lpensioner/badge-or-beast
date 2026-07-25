@@ -27,7 +27,7 @@ export enum SoundEffectId {
   DocumentFlip01 = 'sfx_document_flip_01',
   Alarm01 = 'sfx_alarm_01',
   ShutterClose01 = 'sfx_shutter_close_01',
-  DrawerOpen01 = 'sfx_drawer_open_01',
+  DrawerMove01 = 'sfx_drawer_move_01',
   Footsteps01 = 'sfx_footsteps_01',
 }
 
@@ -97,9 +97,9 @@ const AUDIO_ENTRIES: readonly AudioEntry[] = [
     path: 'audio/sfx/sfx_shutter_close_01',
   },
   {
-    id: SoundEffectId.DrawerOpen01,
+    id: SoundEffectId.DrawerMove01,
     category: AudioCategory.SoundEffect,
-    path: 'audio/sfx/sfx_drawer_open_01',
+    path: 'audio/sfx/sfx_drawer_move_01',
   },
   {
     id: SoundEffectId.Footsteps01,
@@ -120,6 +120,11 @@ export class GameAudioCatalog {
   public static readonly DefaultMusicId = MusicId.BgmTenseAmbientLoop;
   public static readonly SettingsClickId = SoundEffectId.UiSettingsClick01;
   public static readonly DocumentFlipId = SoundEffectId.DocumentFlip01;
+  /** Shared move SFX for both shutter open and close. */
+  public static readonly ShutterMoveId = SoundEffectId.ShutterClose01;
+  public static readonly AlarmId = SoundEffectId.Alarm01;
+  /** Shared move SFX for both drawer open and close. */
+  public static readonly DrawerMoveId = SoundEffectId.DrawerMove01;
 
   public static getPath(id: GameAudioId): string | null {
     return AUDIO_PATH_BY_ID.get(id) ?? null;
