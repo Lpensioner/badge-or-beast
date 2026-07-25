@@ -119,6 +119,7 @@ const AUDIO_CATEGORY_BY_ID = new Map<GameAudioId, AudioCategory>(
 export class GameAudioCatalog {
   public static readonly DefaultMusicId = MusicId.BgmTenseAmbientLoop;
   public static readonly SettingsClickId = SoundEffectId.UiSettingsClick01;
+  public static readonly DocumentFlipId = SoundEffectId.DocumentFlip01;
 
   public static getPath(id: GameAudioId): string | null {
     return AUDIO_PATH_BY_ID.get(id) ?? null;

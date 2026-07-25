@@ -1,4 +1,5 @@
 import { _decorator, Button, Color, Component, Graphics, Node } from 'cc';
+import { AudioManager } from '../audio/AudioManager';
 
 const { ccclass } = _decorator;
 
@@ -118,6 +119,7 @@ export class AppointmentRosterController extends Component {
     if (this.rosterPanelOpen || !this.appointmentRosterPanelRuntime) {
       return;
     }
+    AudioManager.getInstance()?.playCachedDocumentFlip();
     this.appointmentRosterPanelRuntime.active = true;
     this.rosterPanelOpen = true;
     this.setManagedButtonsInteractable(false);

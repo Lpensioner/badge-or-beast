@@ -13,6 +13,7 @@ import {
   UITransform,
   Vec3,
 } from 'cc';
+import { AudioManager } from '../audio/AudioManager';
 
 const { ccclass } = _decorator;
 
@@ -801,6 +802,8 @@ export class EmployeeFilesController extends Component {
     if (index !== this.currentOpenIndex) {
       return;
     }
+
+    AudioManager.getInstance()?.playCachedDocumentFlip();
     this.setDrawerButtonsInteractable(false);
 
     for (const fileHit of this.fileHits) {
@@ -1234,6 +1237,10 @@ export class EmployeeFilesController extends Component {
     if (maxTabIndex < 0 || tabIndex < 0 || tabIndex > maxTabIndex) {
       return;
     }
+    if (tabIndex === this.activeEmployeeFileTabIndex) {
+      return;
+    }
+    AudioManager.getInstance()?.playCachedDocumentFlip();
     if (!this.applyEmployeeFileEntry(this.activeEmployeeFileDrawerIndex, tabIndex)) {
       return;
     }

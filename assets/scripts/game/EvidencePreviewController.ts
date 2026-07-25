@@ -14,6 +14,7 @@ import {
   UITransform,
   resources,
 } from 'cc';
+import { AudioManager } from '../audio/AudioManager';
 import { ShutterToggleController } from './ShutterToggleController';
 import { TelephoneController } from './TelephoneController';
 import { VisitorIntroSequenceController } from './VisitorIntroSequenceController';
@@ -1038,6 +1039,10 @@ export class EvidencePreviewController extends Component {
     this.resetCarterMonsterFlow(true);
   }
 
+  private playDocumentFlipSound(): void {
+    AudioManager.getInstance()?.playCachedDocumentFlip();
+  }
+
   private openEmployeeCard(): void {
     if (
       this.previewOpen ||
@@ -1049,6 +1054,7 @@ export class EvidencePreviewController extends Component {
       return;
     }
 
+    this.playDocumentFlipSound();
     this.drawScrim(0);
     if (this.checklistQuestionPanelRuntime) {
       this.checklistQuestionPanelRuntime.active = false;
@@ -1079,6 +1085,7 @@ export class EvidencePreviewController extends Component {
       return;
     }
 
+    this.playDocumentFlipSound();
     this.drawScrim(170);
     if (this.checklistQuestionPanelRuntime) {
       this.checklistQuestionPanelRuntime.active = false;
@@ -1109,6 +1116,7 @@ export class EvidencePreviewController extends Component {
       return;
     }
 
+    this.playDocumentFlipSound();
     this.drawScrim(170);
     if (this.checklistQuestionPanelRuntime) {
       this.checklistQuestionPanelRuntime.active = false;

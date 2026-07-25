@@ -382,6 +382,25 @@ export class AudioManager extends Component {
     this.playCachedSettingsClick();
   }
 
+  /**
+   * Play document-flip SFX using a pre-cached AudioClip only.
+   * If the clip is not cached yet, skips silently (never late catch-up playback).
+   */
+  public playCachedDocumentFlip(): void {
+    if (!this.soundEnabled) {
+      return;
+    }
+    const source = this.sfxSource;
+    if (!source?.isValid) {
+      return;
+    }
+    const clip = this.clipCache.get(GameAudioCatalog.DocumentFlipId);
+    if (!clip) {
+      return;
+    }
+    source.playOneShot(clip, 1);
+  }
+
   public stopAllSoundEffects(): void {
     // playOneShot instances are fire-and-forget in the public API; stop the shared source only.
     if (this.sfxSource?.isValid) {
@@ -444,9 +463,10 @@ export class AudioManager extends Component {
   };
 
   private preloadCoreClips(): void {
-    // Warm Settings click and BGM before any Settings interaction.
+    // Warm Settings click, document flip, and BGM before interactions.
     // loadClip deduplicates in-flight requests via loadingClips.
     void this.loadClip(GameAudioCatalog.SettingsClickId);
+    void this.loadClip(GameAudioCatalog.DocumentFlipId);
     void this.loadClip(GameAudioCatalog.DefaultMusicId);
   }
 
