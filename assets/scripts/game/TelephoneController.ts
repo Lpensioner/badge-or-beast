@@ -246,6 +246,9 @@ export class TelephoneController extends Component {
     for (const binding of this.keypadButtonBindings) {
       binding.button.node.on(Button.EventType.CLICK, binding.callback, this);
     }
+    if (!this.phoneKeyVisualStates) {
+      return;
+    }
     for (const state of this.phoneKeyVisualStates.values()) {
       state.node.on(Node.EventType.TOUCH_START, this.onPhoneKeyTouchStart, this);
       state.node.on(Node.EventType.TOUCH_END, this.onPhoneKeyTouchEnd, this);
@@ -254,10 +257,12 @@ export class TelephoneController extends Component {
   }
 
   onDisable(): void {
-    for (const state of this.phoneKeyVisualStates.values()) {
-      state.node.off(Node.EventType.TOUCH_START, this.onPhoneKeyTouchStart, this);
-      state.node.off(Node.EventType.TOUCH_END, this.onPhoneKeyTouchEnd, this);
-      state.node.off(Node.EventType.TOUCH_CANCEL, this.onPhoneKeyTouchCancel, this);
+    if (this.phoneKeyVisualStates) {
+      for (const state of this.phoneKeyVisualStates.values()) {
+        state.node.off(Node.EventType.TOUCH_START, this.onPhoneKeyTouchStart, this);
+        state.node.off(Node.EventType.TOUCH_END, this.onPhoneKeyTouchEnd, this);
+        state.node.off(Node.EventType.TOUCH_CANCEL, this.onPhoneKeyTouchCancel, this);
+      }
     }
     this.restoreAllPhoneKeyVisualStates();
     this.telephoneHitButton?.node.off(Button.EventType.CLICK, this.handleTelephoneHitClick, this);
@@ -332,7 +337,11 @@ export class TelephoneController extends Component {
   }
 
   public closeEmergencyPhone(): void {
-    if (this.phonePanelRuntime) {
+    // Scene unload may call this after the component fields were already cleared.
+    if (!this.isValid) {
+      return;
+    }
+    if (this.phonePanelRuntime?.isValid) {
       this.phonePanelRuntime.active = false;
     }
     this.phonePanelOpen = false;
@@ -341,7 +350,7 @@ export class TelephoneController extends Component {
     this.activePhoneNumberLength = this.defaultPhoneNumberLength;
     this.restoreAllPhoneKeyVisualStates();
     this.clearPhoneNumber();
-    if (this.phonePanelCloseHitButton) {
+    if (this.phonePanelCloseHitButton?.isValid) {
       this.phonePanelCloseHitButton.interactable = true;
     }
     this.setManagedButtonsInteractable(true);
@@ -535,11 +544,19 @@ export class TelephoneController extends Component {
   }
 
   private restoreAllPhoneKeyVisualStates(): void {
+    if (!this.phoneKeyVisualStates) {
+      return;
+    }
     for (const state of this.phoneKeyVisualStates.values()) {
+      if (!state?.node?.isValid) {
+        continue;
+      }
       Tween.stopAllByTarget(state.node);
       state.node.setPosition(state.basePosition);
       state.node.setScale(state.baseScale);
-      state.sprite.spriteFrame = state.normalSprite;
+      if (state.sprite?.isValid) {
+        state.sprite.spriteFrame = state.normalSprite;
+      }
       state.releaseRequested = false;
       state.pressCompleted = false;
     }

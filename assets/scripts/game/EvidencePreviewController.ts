@@ -2844,9 +2844,13 @@ export class EvidencePreviewController extends Component {
     this.anxiousReplyShown = false;
 
     this.hideCarterThreatReplyCompletely();
-    this.telephoneController?.closeEmergencyPhone();
-    this.telephoneController?.setTelephoneEntryEnabled(false);
-    this.shutterController?.stopShutterImpactLoop();
+    if (this.telephoneController?.isValid) {
+      this.telephoneController.closeEmergencyPhone();
+      this.telephoneController.setTelephoneEntryEnabled(false);
+    }
+    if (this.shutterController?.isValid) {
+      this.shutterController.stopShutterImpactLoop();
+    }
     if (this.carterMonsterAttackRuntime?.isValid) {
       this.carterMonsterAttackRuntime.active = false;
     }
@@ -2860,8 +2864,10 @@ export class EvidencePreviewController extends Component {
       this.carterCharacter.active = true;
     }
     this.restoreCarterCharacterBaseSize();
-    this.shutterController?.restoreNormalVisual();
-    this.shutterController?.setInteractionEnabled(this.getCachedButtonInteractable('BtnShutterHit'));
+    if (this.shutterController?.isValid) {
+      this.shutterController.restoreNormalVisual();
+      this.shutterController.setInteractionEnabled(this.getCachedButtonInteractable('BtnShutterHit'));
+    }
 
     if (restoreButtons) {
       if (this.encounterButtonStateCache.size > 0) {
@@ -3065,7 +3071,8 @@ export class EvidencePreviewController extends Component {
   }
 
   private restoreCarterCharacterBaseSize(): void {
-    if (!this.carterCharacterUi) {
+    // Scene unload may leave a stale UITransform whose _contentSize is already null.
+    if (!this.carterCharacterUi?.isValid) {
       return;
     }
     if (this.carterCharacterBaseWidth <= 0 || this.carterCharacterBaseHeight <= 0) {
