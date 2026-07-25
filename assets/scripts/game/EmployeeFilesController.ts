@@ -1,5 +1,6 @@
 import {
   _decorator,
+  assetManager,
   Button,
   Component,
   isValid,
@@ -20,6 +21,9 @@ const CLOSE_DURATION = 0.18;
 const OPEN_EASING = 'cubicOut' as const;
 const CLOSE_EASING = 'cubicInOut' as const;
 const MOVE_RATIO = 0.7;
+const SAM_PORTRAIT_SPRITEFRAME_UUID = '77bf3f53-9419-49d9-9e02-5e6842ea43f9@f9941';
+const MARK_PORTRAIT_SPRITEFRAME_UUID = 'fb1193ad-141b-4e72-ab0c-37806ded9939@f9941';
+const JAKE_PORTRAIT_SPRITEFRAME_UUID = 'b4b7f2e2-ea45-495a-b888-70dba58ac1ae@f9941';
 
 interface CachedButtonState {
   button: Button;
@@ -34,7 +38,7 @@ interface RegisteredButtonHandler {
 
 type InspectionSubjectId = 'carter' | 'ethan';
 
-type EmployeeFileId = 'carter' | 'ethan';
+type EmployeeFileId = 'carter' | 'ethan' | 'sam' | 'mark' | 'jake';
 
 interface EmployeeFileDefinition {
   readonly id: EmployeeFileId;
@@ -79,6 +83,8 @@ export class EmployeeFilesController extends Component {
 
   private readonly fileClickHandlers: Array<() => void> = [];
 
+  private readonly detailTabClickHandlers: Array<() => void> = [];
+
   private detailCloseHandler: (() => void) | null = null;
 
   private readonly drawerButtons: Button[] = [];
@@ -87,9 +93,15 @@ export class EmployeeFilesController extends Component {
 
   private detailCloseButton: Button | null = null;
 
+  private readonly detailTabHits: Node[] = [];
+
+  private readonly detailTabButtons: Button[] = [];
+
   private readonly registeredDrawerHandlers: RegisteredButtonHandler[] = [];
 
   private readonly registeredFileHandlers: RegisteredButtonHandler[] = [];
+
+  private readonly registeredDetailTabHandlers: RegisteredButtonHandler[] = [];
 
   private registeredDetailCloseHandler: RegisteredButtonHandler | null = null;
 
@@ -131,6 +143,14 @@ export class EmployeeFilesController extends Component {
   private portraitBaseHeight = 0;
   private carterPortraitFrame: SpriteFrame | null = null;
   private ethanPortraitFrame: SpriteFrame | null = null;
+  private samPortraitFrame: SpriteFrame | null = null;
+  private markPortraitFrame: SpriteFrame | null = null;
+  private jakePortraitFrame: SpriteFrame | null = null;
+  private samPortraitLoading = false;
+  private markPortraitLoading = false;
+  private jakePortraitLoading = false;
+  private activeEmployeeFileDrawerIndex = -1;
+  private activeEmployeeFileTabIndex = 0;
 
   onLoad(): void {
     if (this.node.name !== 'EmployeeDrawersClosedRuntime') {
@@ -154,6 +174,7 @@ export class EmployeeFilesController extends Component {
 
     this.enforceInitialState();
     this.registerEvents();
+    this.resolvePortraitSourcesIfNeeded();
     this.ready = true;
   }
 
@@ -169,15 +190,24 @@ export class EmployeeFilesController extends Component {
     this.stopAllTweensSafely();
     this.drawerClickHandlers.length = 0;
     this.fileClickHandlers.length = 0;
+    this.detailTabClickHandlers.length = 0;
     this.baseButtonStates.length = 0;
     this.drawerButtons.length = 0;
     this.fileButtons.length = 0;
+    this.detailTabButtons.length = 0;
+    this.detailTabHits.length = 0;
     this.detailCloseButton = null;
     this.detailCloseHit = null;
     this.fileDetailContentNodes.length = 0;
     this.fileDetailContent = null;
     this.detailPanel = null;
     this.openRuntime = null;
+    this.samPortraitFrame = null;
+    this.markPortraitFrame = null;
+    this.jakePortraitFrame = null;
+    this.samPortraitLoading = false;
+    this.markPortraitLoading = false;
+    this.jakePortraitLoading = false;
   }
 
   public setActiveInspectionSubject(_subjectId: InspectionSubjectId): void {}
@@ -343,6 +373,26 @@ export class EmployeeFilesController extends Component {
       return false;
     }
 
+    const detailTabNames = [
+      'EmployeeFileDetailTab01Hit',
+      'EmployeeFileDetailTab02Hit',
+      'EmployeeFileDetailTab03Hit',
+    ];
+    for (const name of detailTabNames) {
+      const node = this.detailPanel.getChildByName(name);
+      if (!node) {
+        this.fail(`Missing node: ${name}`);
+        return false;
+      }
+      const button = node.getComponent(Button);
+      if (!button) {
+        this.fail(`Missing Button on node: ${name}`);
+        return false;
+      }
+      this.detailTabHits.push(node);
+      this.detailTabButtons.push(button);
+    }
+
     const consoleControls = canvas.getChildByName('ConsoleControls');
     if (!consoleControls) {
       this.fail('Missing node: ConsoleControls');
@@ -456,7 +506,10 @@ export class EmployeeFilesController extends Component {
   private enforceInitialState(): void {
     this.currentOpenIndex = -1;
     this.isAnimating = false;
+    this.activeEmployeeFileDrawerIndex = -1;
+    this.activeEmployeeFileTabIndex = 0;
     this.forceCloseDetailVisibility();
+    this.setDetailTabInteractable(false, false, false);
 
     for (let index = 0; index < this.drawerVisuals.length; index += 1) {
       this.openVisuals[index].active = false;
@@ -496,6 +549,7 @@ export class EmployeeFilesController extends Component {
   private registerEvents(): void {
     this.registeredDrawerHandlers.length = 0;
     this.registeredFileHandlers.length = 0;
+    this.registeredDetailTabHandlers.length = 0;
     this.registeredDetailCloseHandler = null;
 
     for (let index = 0; index < this.drawerButtons.length; index += 1) {
@@ -525,6 +579,22 @@ export class EmployeeFilesController extends Component {
       this.fileClickHandlers.push(handler);
       button.node.on(Button.EventType.CLICK, handler, this);
       this.registeredFileHandlers.push({
+        button,
+        callback: handler,
+      });
+    }
+
+    for (let index = 0; index < this.detailTabButtons.length; index += 1) {
+      const button = this.detailTabButtons[index];
+      if (!isValid(button, true) || !isValid(button.node, true)) {
+        continue;
+      }
+      const handler = (): void => {
+        this.selectEmployeeFileDetailTab(index);
+      };
+      this.detailTabClickHandlers.push(handler);
+      button.node.on(Button.EventType.CLICK, handler, this);
+      this.registeredDetailTabHandlers.push({
         button,
         callback: handler,
       });
@@ -571,6 +641,18 @@ export class EmployeeFilesController extends Component {
       }
     }
     this.registeredFileHandlers.length = 0;
+
+    for (const entry of this.registeredDetailTabHandlers) {
+      if (
+        entry.button &&
+        isValid(entry.button, true) &&
+        entry.button.node &&
+        isValid(entry.button.node, true)
+      ) {
+        entry.button.node.off(Button.EventType.CLICK, entry.callback, this);
+      }
+    }
+    this.registeredDetailTabHandlers.length = 0;
 
     if (
       this.registeredDetailCloseHandler &&
@@ -630,6 +712,9 @@ export class EmployeeFilesController extends Component {
           return;
         }
         this.fileHits[index].active = true;
+        if (this.fileButtons[index] && isValid(this.fileButtons[index], true)) {
+          this.fileButtons[index].interactable = this.hasDrawerFileDetail(index);
+        }
         this.isAnimating = false;
       })
       .start();
@@ -691,6 +776,9 @@ export class EmployeeFilesController extends Component {
     if (index !== this.currentOpenIndex) {
       return;
     }
+    if (!this.hasDrawerFileDetail(index)) {
+      return;
+    }
 
     this.openFileDetail(index);
   }
@@ -721,9 +809,19 @@ export class EmployeeFilesController extends Component {
       }
     }
 
+    this.activeEmployeeFileDrawerIndex = index;
+    this.activeEmployeeFileTabIndex = 0;
+    if (index === 0) {
+      this.setDetailTabInteractable(true, true, true);
+    } else if (index === 1) {
+      this.setDetailTabInteractable(true, true, false);
+    } else {
+      this.setDetailTabInteractable(false, false, false);
+    }
+
     this.detailPanel.active = true;
     this.setFileDetailContentVisible(true);
-    if (!this.applyEmployeeFileEntry(index)) {
+    if (!this.applyEmployeeFileEntry(this.activeEmployeeFileDrawerIndex, this.activeEmployeeFileTabIndex)) {
       this.setFileDetailContentVisible(false);
       this.detailPanel.active = false;
       this.setDrawerButtonsInteractable(true);
@@ -735,18 +833,30 @@ export class EmployeeFilesController extends Component {
     this.isDetailOpen = true;
   }
 
-  private applyEmployeeFileEntry(index: number): boolean {
-    const definition = this.getEmployeeFileDefinition(index);
+  private applyEmployeeFileEntry(drawerIndex: number, tabIndex: number): boolean {
+    if (drawerIndex === 0 && tabIndex === 2 && !this.samPortraitFrame) {
+      this.resolvePortraitSourcesIfNeeded();
+      return false;
+    }
+    if (drawerIndex === 1 && tabIndex === 0 && !this.markPortraitFrame) {
+      this.resolvePortraitSourcesIfNeeded();
+      return false;
+    }
+    if (drawerIndex === 1 && tabIndex === 1 && !this.jakePortraitFrame) {
+      this.resolvePortraitSourcesIfNeeded();
+      return false;
+    }
+    const definition = this.getEmployeeFileDefinition(drawerIndex, tabIndex);
     if (definition) {
       return this.applyEmployeeFileDefinition(definition);
     }
-    const fallbackEntry = this.getFallbackEmployeeFileEntry(index);
+    const fallbackEntry = this.getFallbackEmployeeFileEntry(drawerIndex);
     return this.applyFallbackEmployeeFileEntry(fallbackEntry);
   }
 
-  private getEmployeeFileDefinition(index: number): EmployeeFileDefinition | null {
+  private getEmployeeFileDefinition(drawerIndex: number, tabIndex: number): EmployeeFileDefinition | null {
     this.resolvePortraitSourcesIfNeeded();
-    if (index === 0 && this.carterPortraitFrame) {
+    if (drawerIndex === 0 && tabIndex === 0 && this.carterPortraitFrame) {
       return {
         id: 'carter',
         department: 'Research Department',
@@ -763,23 +873,65 @@ export class EmployeeFilesController extends Component {
         behavioralHabits: [],
       };
     }
-    if (index === 1 && this.ethanPortraitFrame) {
+    if (drawerIndex === 0 && tabIndex === 1 && this.ethanPortraitFrame) {
       return {
         id: 'ethan',
-        department: 'Research Lab 103',
-        departmentPhone: '3103',
+        department: 'Research Department',
+        departmentPhone: '9527',
         displayName: 'Ethan',
         employeeId: '867530',
-        position: 'Researcher 103',
+        position: 'Research Assistant',
         portraitFrame: this.ethanPortraitFrame,
         appearanceFeatures: ['Large, prominent eyes'],
         behavioralHabits: ['Frequently adjusts and plays with his hairstyle'],
       };
     }
+    if (drawerIndex === 0 && tabIndex === 2 && this.samPortraitFrame) {
+      return {
+        id: 'sam',
+        department: 'Research Department',
+        departmentPhone: '9527',
+        displayName: 'Sam',
+        employeeId: '481206',
+        position: 'Research Team Lead',
+        portraitFrame: this.samPortraitFrame,
+        appearanceFeatures: ['Pale, warm-toned skin', 'Carefully maintains his hairstyle'],
+        behavioralHabits: ['Gentle and even-tempered', 'Always willing to help coworkers'],
+      };
+    }
+    if (drawerIndex === 1 && tabIndex === 0 && this.markPortraitFrame) {
+      return {
+        id: 'mark',
+        department: 'Production Department',
+        departmentPhone: '6842',
+        displayName: 'Mark',
+        employeeId: '624817',
+        position: 'Production Manager',
+        portraitFrame: this.markPortraitFrame,
+        appearanceFeatures: ['Thick, prominent eyebrows', 'No facial moles'],
+        behavioralHabits: [],
+      };
+    }
+    if (drawerIndex === 1 && tabIndex === 1 && this.jakePortraitFrame) {
+      return {
+        id: 'jake',
+        department: 'Production Department',
+        departmentPhone: '6842',
+        displayName: 'Jake',
+        employeeId: '624935',
+        position: 'Production Technician',
+        portraitFrame: this.jakePortraitFrame,
+        appearanceFeatures: ['Gray-blue irises'],
+        behavioralHabits: [
+          'Carefully maintains and protects his eyebrows',
+          'Reserved and aloof',
+        ],
+      };
+    }
     return null;
   }
 
-  private getFallbackEmployeeFileEntry(index: number): EmployeeFileFallbackEntry {
+  private getFallbackEmployeeFileEntry(drawerIndex: number): EmployeeFileFallbackEntry {
     this.resolvePortraitSourcesIfNeeded();
     return {
       displayName: '—',
@@ -789,7 +941,7 @@ export class EmployeeFilesController extends Component {
       position: 'Position: —',
       appearance: '—',
       habits: '—',
-      portraitFrame: index === 2 ? this.ethanPortraitFrame : null,
+      portraitFrame: drawerIndex === 2 ? this.ethanPortraitFrame : null,
     };
   }
 
@@ -875,14 +1027,94 @@ export class EmployeeFilesController extends Component {
     if (!this.carterPortraitFrame && this.filePortraitSprite?.spriteFrame) {
       this.carterPortraitFrame = this.filePortraitSprite.spriteFrame;
     }
-    if (this.ethanPortraitFrame) {
+    if (!this.ethanPortraitFrame) {
+      const canvas = this.node.parent?.parent;
+      const assetSources = canvas?.getChildByName('InspectionSubjectAssetSources') ?? null;
+      const ethanPortraitSource = assetSources?.getChildByName('EthanPortraitSource') ?? null;
+      const ethanPortraitSprite = ethanPortraitSource?.getComponent(Sprite) ?? null;
+      this.ethanPortraitFrame = ethanPortraitSprite?.spriteFrame ?? null;
+    }
+    this.loadSamPortraitIfNeeded();
+    this.loadMarkPortraitIfNeeded();
+    this.loadJakePortraitIfNeeded();
+  }
+
+  private loadSamPortraitIfNeeded(): void {
+    if (this.samPortraitFrame || this.samPortraitLoading) {
       return;
     }
-    const canvas = this.node.parent?.parent;
-    const assetSources = canvas?.getChildByName('InspectionSubjectAssetSources') ?? null;
-    const ethanPortraitSource = assetSources?.getChildByName('EthanPortraitSource') ?? null;
-    const ethanPortraitSprite = ethanPortraitSource?.getComponent(Sprite) ?? null;
-    this.ethanPortraitFrame = ethanPortraitSprite?.spriteFrame ?? null;
+    this.samPortraitLoading = true;
+    assetManager.loadAny(SAM_PORTRAIT_SPRITEFRAME_UUID, (error, asset) => {
+      this.samPortraitLoading = false;
+      if (error) {
+        console.warn('[EmployeeFilesController] Failed to load Sam portrait sprite frame.', error);
+        return;
+      }
+      const frame = asset as SpriteFrame | null;
+      if (!frame) {
+        return;
+      }
+      this.samPortraitFrame = frame;
+      if (
+        this.isDetailOpen &&
+        this.activeEmployeeFileDrawerIndex === 0 &&
+        this.activeEmployeeFileTabIndex === 2
+      ) {
+        this.applyEmployeeFileEntry(this.activeEmployeeFileDrawerIndex, this.activeEmployeeFileTabIndex);
+      }
+    });
+  }
+
+  private loadMarkPortraitIfNeeded(): void {
+    if (this.markPortraitFrame || this.markPortraitLoading) {
+      return;
+    }
+    this.markPortraitLoading = true;
+    assetManager.loadAny(MARK_PORTRAIT_SPRITEFRAME_UUID, (error, asset) => {
+      this.markPortraitLoading = false;
+      if (error) {
+        console.warn('[EmployeeFilesController] Failed to load Mark portrait sprite frame.', error);
+        return;
+      }
+      const frame = asset as SpriteFrame | null;
+      if (!frame) {
+        return;
+      }
+      this.markPortraitFrame = frame;
+      if (
+        this.isDetailOpen &&
+        this.activeEmployeeFileDrawerIndex === 1 &&
+        this.activeEmployeeFileTabIndex === 0
+      ) {
+        this.applyEmployeeFileEntry(this.activeEmployeeFileDrawerIndex, this.activeEmployeeFileTabIndex);
+      }
+    });
+  }
+
+  private loadJakePortraitIfNeeded(): void {
+    if (this.jakePortraitFrame || this.jakePortraitLoading) {
+      return;
+    }
+    this.jakePortraitLoading = true;
+    assetManager.loadAny(JAKE_PORTRAIT_SPRITEFRAME_UUID, (error, asset) => {
+      this.jakePortraitLoading = false;
+      if (error) {
+        console.warn('[EmployeeFilesController] Failed to load Jake portrait sprite frame.', error);
+        return;
+      }
+      const frame = asset as SpriteFrame | null;
+      if (!frame) {
+        return;
+      }
+      this.jakePortraitFrame = frame;
+      if (
+        this.isDetailOpen &&
+        this.activeEmployeeFileDrawerIndex === 1 &&
+        this.activeEmployeeFileTabIndex === 1
+      ) {
+        this.applyEmployeeFileEntry(this.activeEmployeeFileDrawerIndex, this.activeEmployeeFileTabIndex);
+      }
+    });
   }
 
   private formatFeatureList(items: readonly string[]): string {
@@ -940,6 +1172,9 @@ export class EmployeeFilesController extends Component {
     this.setFileDetailContentVisible(false);
     this.detailPanel.active = false;
     this.isDetailOpen = false;
+    this.activeEmployeeFileDrawerIndex = -1;
+    this.activeEmployeeFileTabIndex = 0;
+    this.setDetailTabInteractable(false, false, false);
     this.setDrawerButtonsInteractable(true);
 
     if (this.currentOpenIndex >= 0 && this.isNodeAlive(this.fileHits[this.currentOpenIndex])) {
@@ -974,6 +1209,49 @@ export class EmployeeFilesController extends Component {
         state.button.interactable = state.interactable;
       }
     }
+  }
+
+  private setDetailTabInteractable(tab01: boolean, tab02: boolean, tab03: boolean): void {
+    const states = [tab01, tab02, tab03];
+    for (let index = 0; index < this.detailTabButtons.length; index += 1) {
+      const button = this.detailTabButtons[index];
+      if (isValid(button, true) && isValid(button.node, true)) {
+        button.interactable = states[index] ?? false;
+      }
+    }
+  }
+
+  private selectEmployeeFileDetailTab(tabIndex: number): void {
+    if (
+      !this.ready ||
+      !this.isDetailOpen ||
+      this.isAnimating ||
+      this.isDestroying
+    ) {
+      return;
+    }
+    const maxTabIndex = this.getMaxTabIndexForDrawer(this.activeEmployeeFileDrawerIndex);
+    if (maxTabIndex < 0 || tabIndex < 0 || tabIndex > maxTabIndex) {
+      return;
+    }
+    if (!this.applyEmployeeFileEntry(this.activeEmployeeFileDrawerIndex, tabIndex)) {
+      return;
+    }
+    this.activeEmployeeFileTabIndex = tabIndex;
+  }
+
+  private hasDrawerFileDetail(drawerIndex: number): boolean {
+    return drawerIndex === 0 || drawerIndex === 1;
+  }
+
+  private getMaxTabIndexForDrawer(drawerIndex: number): number {
+    if (drawerIndex === 0) {
+      return 2;
+    }
+    if (drawerIndex === 1) {
+      return 1;
+    }
+    return -1;
   }
 
   private stopAllTweensSafely(): void {
