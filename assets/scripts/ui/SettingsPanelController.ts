@@ -13,6 +13,7 @@ import {
   director,
   resources,
 } from 'cc';
+import { AudioManager } from '../audio/AudioManager';
 
 const { ccclass } = _decorator;
 
@@ -50,10 +51,6 @@ export class SettingsPanelController extends Component {
   private sceneSwitching = false;
   private buildingUi = false;
 
-  private soundEnabled = false;
-  private musicEnabled = false;
-  private voiceEnabled = false;
-
   onLoad(): void {
     this.canvas = this.resolveCanvas();
     if (!this.canvas) {
@@ -62,6 +59,7 @@ export class SettingsPanelController extends Component {
       return;
     }
 
+    AudioManager.ensureInstance();
     this.ensureUi();
   }
 
@@ -84,11 +82,12 @@ export class SettingsPanelController extends Component {
     this.settingsOverlay.setSiblingIndex(this.canvas.children.length - 1);
     this.settingsOverlay.active = true;
     this.panelOpen = true;
+    this.redrawToggleIcons();
     this.refreshReturnHomeVisibility();
   }
 
   public closeSettings(): void {
-    if (!this.settingsOverlay) {
+    if (!this.settingsOverlay || !this.panelOpen) {
       return;
     }
     this.settingsOverlay.active = false;
@@ -448,25 +447,55 @@ export class SettingsPanelController extends Component {
   }
 
   private onSettingsButtonClick = (): void => {
+    if (!this.uiReady || this.panelOpen) {
+      return;
+    }
+    const audio = this.getAudioManager();
+    // Click feedback first, then UI / gesture side effects.
+    audio.playCachedSettingsClick();
+    audio.handleUserGesture();
     this.openSettings();
   };
 
   private onCloseClick = (): void => {
+    if (!this.panelOpen) {
+      return;
+    }
+    const audio = this.getAudioManager();
+    audio.playCachedSettingsClick();
+    audio.handleUserGesture();
     this.closeSettings();
   };
 
   private onSoundClick = (): void => {
-    this.soundEnabled = !this.soundEnabled;
+    const audio = this.getAudioManager();
+    const currentlyEnabled = audio.getSoundEnabled();
+    if (currentlyEnabled) {
+      // ON -> OFF: play feedback while sound is still enabled, then disable.
+      audio.playCachedSettingsClick();
+      audio.setSoundEnabled(false);
+    } else {
+      // OFF -> ON: enable first so the feedback click can be heard.
+      audio.setSoundEnabled(true);
+      audio.playCachedSettingsClick();
+    }
+    audio.handleUserGesture();
     this.redrawToggleIcon('sound');
   };
 
   private onMusicClick = (): void => {
-    this.musicEnabled = !this.musicEnabled;
+    const audio = this.getAudioManager();
+    audio.playCachedSettingsClick();
+    audio.handleUserGesture();
+    audio.setMusicEnabled(!audio.getMusicEnabled());
     this.redrawToggleIcon('music');
   };
 
   private onVoiceClick = (): void => {
-    this.voiceEnabled = !this.voiceEnabled;
+    const audio = this.getAudioManager();
+    audio.playCachedSettingsClick();
+    audio.handleUserGesture();
+    audio.setVoiceEnabled(!audio.getVoiceEnabled());
     this.redrawToggleIcon('voice');
   };
 
@@ -477,6 +506,10 @@ export class SettingsPanelController extends Component {
     if (!this.isGameScene()) {
       return;
     }
+
+    const audio = this.getAudioManager();
+    audio.playCachedSettingsClick();
+    audio.handleUserGesture();
 
     this.sceneSwitching = true;
     this.closeSettings();
@@ -494,6 +527,10 @@ export class SettingsPanelController extends Component {
       this.bindEvents();
     });
   };
+
+  private getAudioManager(): AudioManager {
+    return AudioManager.ensureInstance();
+  }
 
   private refreshReturnHomeVisibility(): void {
     if (!this.returnHomeButton?.isValid) {
@@ -537,15 +574,16 @@ export class SettingsPanelController extends Component {
   private redrawToggleIcon(kind: ToggleKind): void {
     let graphics: Graphics | null = null;
     let enabled = false;
+    const audio = AudioManager.getInstance() ?? AudioManager.ensureInstance();
     if (kind === 'sound') {
       graphics = this.soundIconGraphics;
-      enabled = this.soundEnabled;
+      enabled = audio.getSoundEnabled();
     } else if (kind === 'music') {
       graphics = this.musicIconGraphics;
-      enabled = this.musicEnabled;
+      enabled = audio.getMusicEnabled();
     } else {
       graphics = this.voiceIconGraphics;
-      enabled = this.voiceEnabled;
+      enabled = audio.getVoiceEnabled();
     }
     if (!graphics) {
       return;

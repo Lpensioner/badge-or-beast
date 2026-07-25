@@ -1,0 +1,578 @@
+import {
+  _decorator,
+  AudioClip,
+  AudioSource,
+  Component,
+  Input,
+  Node,
+  director,
+  input,
+  resources,
+  sys,
+} from 'cc';
+import {
+  GameAudioCatalog,
+  GameAudioId,
+  MusicId,
+  SoundEffectId,
+  VoiceId,
+} from './GameAudioCatalog';
+
+const { ccclass } = _decorator;
+
+const AUDIO_MANAGER_NODE_NAME = 'AudioManager';
+const SETTINGS_STORAGE_KEY = 'game.audio.settings.v1';
+
+const VOLUME_SOUND_EFFECTS = 0.8;
+const VOLUME_MUSIC = 0.35;
+const VOLUME_VOICE = 1.0;
+
+interface AudioSettingsState {
+  soundEnabled: boolean;
+  musicEnabled: boolean;
+  voiceEnabled: boolean;
+}
+
+const DEFAULT_SETTINGS: AudioSettingsState = {
+  soundEnabled: true,
+  musicEnabled: true,
+  voiceEnabled: true,
+};
+
+@ccclass('AudioManager')
+export class AudioManager extends Component {
+  private static instance: AudioManager | null = null;
+
+  private musicSource: AudioSource | null = null;
+  private voiceSource: AudioSource | null = null;
+  private sfxSource: AudioSource | null = null;
+
+  private soundEnabled = DEFAULT_SETTINGS.soundEnabled;
+  private musicEnabled = DEFAULT_SETTINGS.musicEnabled;
+  private voiceEnabled = DEFAULT_SETTINGS.voiceEnabled;
+
+  private clipCache = new Map<GameAudioId, AudioClip>();
+  private loadingClips = new Map<GameAudioId, Promise<AudioClip | null>>();
+
+  private userGestureReceived = false;
+  private firstInteractionBound = false;
+  private currentMusicId: MusicId | null = null;
+  private desiredMusicId: MusicId | null = null;
+  private musicRequestSerial = 0;
+  private voiceRequestSerial = 0;
+
+  public static getInstance(): AudioManager | null {
+    if (AudioManager.instance?.isValid) {
+      return AudioManager.instance;
+    }
+    return null;
+  }
+
+  public static ensureInstance(): AudioManager {
+    const existing = AudioManager.getInstance();
+    if (existing) {
+      return existing;
+    }
+
+    const scene = director.getScene();
+    if (!scene) {
+      throw new Error('[AudioManager] Cannot create instance: no active scene.');
+    }
+
+    const existingNode = scene.getChildByName(AUDIO_MANAGER_NODE_NAME);
+    if (existingNode?.isValid) {
+      const existingComp = existingNode.getComponent(AudioManager);
+      if (existingComp?.isValid) {
+        AudioManager.instance = existingComp;
+        director.addPersistRootNode(existingNode);
+        return existingComp;
+      }
+    }
+
+    const node = new Node(AUDIO_MANAGER_NODE_NAME);
+    scene.addChild(node);
+    const manager = node.addComponent(AudioManager);
+    director.addPersistRootNode(node);
+    AudioManager.instance = manager;
+    return manager;
+  }
+
+  onLoad(): void {
+    if (AudioManager.instance && AudioManager.instance !== this && AudioManager.instance.isValid) {
+      console.warn('[AudioManager] Duplicate instance detected; destroying the new node.');
+      this.node.destroy();
+      return;
+    }
+
+    AudioManager.instance = this;
+    this.loadSettingsFromStorage();
+    this.ensureAudioSources();
+    director.addPersistRootNode(this.node);
+    this.bindFirstInteractionUnlock();
+    this.preloadCoreClips();
+    // HomeScene entry: request BGM immediately (do not wait for Start button).
+    this.startHomeBackgroundMusic();
+  }
+
+  onDestroy(): void {
+    this.unbindFirstInteractionUnlock();
+    if (AudioManager.instance === this) {
+      AudioManager.instance = null;
+    }
+    this.musicSource = null;
+    this.voiceSource = null;
+    this.sfxSource = null;
+    this.desiredMusicId = null;
+    this.clipCache.clear();
+    this.loadingClips.clear();
+  }
+
+  public getSoundEnabled(): boolean {
+    return this.soundEnabled;
+  }
+
+  public getMusicEnabled(): boolean {
+    return this.musicEnabled;
+  }
+
+  public getVoiceEnabled(): boolean {
+    return this.voiceEnabled;
+  }
+
+  public setSoundEnabled(enabled: boolean): void {
+    this.soundEnabled = enabled;
+    this.persistSettings();
+    if (!enabled) {
+      this.stopAllSoundEffects();
+    }
+  }
+
+  public setMusicEnabled(enabled: boolean): void {
+    this.musicEnabled = enabled;
+    this.persistSettings();
+    if (!enabled) {
+      this.stopMusic();
+      return;
+    }
+    this.ensureBackgroundMusic(true);
+  }
+
+  public setVoiceEnabled(enabled: boolean): void {
+    this.voiceEnabled = enabled;
+    this.persistSettings();
+    if (!enabled) {
+      this.stopVoice();
+    }
+  }
+
+  /**
+   * Web autoplay unlock: browsers may block the HomeScene enter attempt until a gesture.
+   * Calling this inside a real touch/mouse callback resumes BGM without requiring Start.
+   */
+  public handleUserGesture(): void {
+    this.userGestureReceived = true;
+    if (!this.musicEnabled) {
+      return;
+    }
+    const source = this.musicSource;
+    if (source?.isValid && source.clip && this.currentMusicId && !source.playing) {
+      // Clip was prepared on HomeScene enter but autoplay was blocked — resume now.
+      source.play();
+      return;
+    }
+    this.ensureBackgroundMusic(false);
+  }
+
+  /** Start default looping BGM for HomeScene entry. */
+  public startHomeBackgroundMusic(): void {
+    this.ensureBackgroundMusic(false);
+  }
+
+  public ensureBackgroundMusic(forceRestart = false): void {
+    if (!this.musicEnabled) {
+      return;
+    }
+    this.playMusic(GameAudioCatalog.DefaultMusicId, true, forceRestart);
+  }
+
+  public playMusic(id: MusicId, loop = true, forceRestart = false): void {
+    if (!this.musicEnabled) {
+      return;
+    }
+
+    const musicSource = this.musicSource;
+    if (!musicSource?.isValid) {
+      return;
+    }
+
+    this.desiredMusicId = id;
+
+    if (
+      !forceRestart &&
+      this.currentMusicId === id &&
+      musicSource.playing &&
+      musicSource.clip
+    ) {
+      return;
+    }
+
+    // Prepared on enter but not audible yet (common on Web) — just call play again.
+    if (
+      !forceRestart &&
+      this.currentMusicId === id &&
+      musicSource.clip &&
+      !musicSource.playing
+    ) {
+      musicSource.loop = loop;
+      musicSource.volume = VOLUME_MUSIC;
+      musicSource.play();
+      return;
+    }
+
+    const requestSerial = ++this.musicRequestSerial;
+    const path = GameAudioCatalog.getPath(id);
+    if (!path) {
+      console.error(`[AudioManager] Unknown music id: ${id}`);
+      return;
+    }
+
+    const cached = this.clipCache.get(id);
+    if (cached) {
+      this.applyMusicClip(cached, id, loop, requestSerial);
+      return;
+    }
+
+    this.loadClip(id)
+      .then((clip) => {
+        if (!clip) {
+          console.error(`[AudioManager] Failed to load music. id=${id} path=${path}`);
+          return;
+        }
+        this.applyMusicClip(clip, id, loop, requestSerial);
+      })
+      .catch((error: unknown) => {
+        console.error(`[AudioManager] Unexpected music load error. id=${id} path=${path}`, error);
+      });
+  }
+
+  public stopMusic(): void {
+    this.musicRequestSerial += 1;
+    this.desiredMusicId = null;
+    this.currentMusicId = null;
+    if (this.musicSource?.isValid) {
+      this.musicSource.stop();
+    }
+  }
+
+  public playVoice(id: VoiceId): void {
+    if (!this.voiceEnabled) {
+      return;
+    }
+
+    const voiceSource = this.voiceSource;
+    if (!voiceSource?.isValid) {
+      return;
+    }
+
+    const requestSerial = ++this.voiceRequestSerial;
+    const path = GameAudioCatalog.getPath(id);
+    if (!path) {
+      console.error(`[AudioManager] Unknown voice id: ${id}`);
+      return;
+    }
+
+    this.loadClip(id)
+      .then((clip) => {
+        if (requestSerial !== this.voiceRequestSerial) {
+          return;
+        }
+        if (!this.isValid || !this.voiceEnabled) {
+          return;
+        }
+        if (!this.voiceSource?.isValid) {
+          return;
+        }
+        if (!clip) {
+          console.error(`[AudioManager] Failed to load voice. id=${id} path=${path}`);
+          return;
+        }
+
+        this.voiceSource.stop();
+        this.voiceSource.clip = clip;
+        this.voiceSource.loop = false;
+        this.voiceSource.volume = VOLUME_VOICE;
+        this.voiceSource.play();
+      })
+      .catch((error: unknown) => {
+        console.error(`[AudioManager] Unexpected voice load error. id=${id} path=${path}`, error);
+      });
+  }
+
+  public stopVoice(): void {
+    this.voiceRequestSerial += 1;
+    if (this.voiceSource?.isValid) {
+      this.voiceSource.stop();
+    }
+  }
+
+  public playSoundEffect(id: SoundEffectId): void {
+    if (!this.soundEnabled) {
+      return;
+    }
+    if (!this.sfxSource?.isValid) {
+      return;
+    }
+
+    const path = GameAudioCatalog.getPath(id);
+    if (!path) {
+      console.error(`[AudioManager] Unknown sound effect id: ${id}`);
+      return;
+    }
+
+    const cached = this.clipCache.get(id);
+    if (cached) {
+      this.sfxSource.playOneShot(cached, 1);
+      return;
+    }
+
+    // Non-settings callers may still request uncached clips; settings click never uses this path.
+    this.loadClip(id)
+      .then((clip) => {
+        if (!this.isValid || !this.soundEnabled) {
+          return;
+        }
+        if (!this.sfxSource?.isValid) {
+          return;
+        }
+        if (!clip) {
+          console.error(`[AudioManager] Failed to load sound effect. id=${id} path=${path}`);
+          return;
+        }
+
+        this.sfxSource.playOneShot(clip, 1);
+      })
+      .catch((error: unknown) => {
+        console.error(
+          `[AudioManager] Unexpected sound effect load error. id=${id} path=${path}`,
+          error,
+        );
+      });
+  }
+
+  /**
+   * Play the Settings UI click using a pre-cached AudioClip only.
+   * If the clip is not cached yet, skips silently (never late catch-up playback).
+   */
+  public playCachedSettingsClick(): void {
+    if (!this.soundEnabled) {
+      return;
+    }
+    const source = this.sfxSource;
+    if (!source?.isValid) {
+      return;
+    }
+    const clip = this.clipCache.get(GameAudioCatalog.SettingsClickId);
+    if (!clip) {
+      return;
+    }
+    source.playOneShot(clip, 1);
+  }
+
+  public playSettingsClick(): void {
+    this.playCachedSettingsClick();
+  }
+
+  public stopAllSoundEffects(): void {
+    // playOneShot instances are fire-and-forget in the public API; stop the shared source only.
+    if (this.sfxSource?.isValid) {
+      this.sfxSource.stop();
+    }
+  }
+
+  public isSettingsClickCached(): boolean {
+    return this.clipCache.has(GameAudioCatalog.SettingsClickId);
+  }
+
+  private applyMusicClip(
+    clip: AudioClip,
+    id: MusicId,
+    loop: boolean,
+    requestSerial: number,
+  ): void {
+    if (requestSerial !== this.musicRequestSerial) {
+      return;
+    }
+    if (this.desiredMusicId !== id) {
+      return;
+    }
+    if (!this.isValid || !this.musicEnabled) {
+      return;
+    }
+    if (!this.musicSource?.isValid) {
+      return;
+    }
+
+    this.musicSource.stop();
+    this.musicSource.clip = clip;
+    this.musicSource.loop = loop;
+    this.musicSource.volume = VOLUME_MUSIC;
+    this.musicSource.play();
+    this.currentMusicId = id;
+  }
+
+  private bindFirstInteractionUnlock(): void {
+    if (this.firstInteractionBound) {
+      return;
+    }
+    this.firstInteractionBound = true;
+    input.on(Input.EventType.TOUCH_END, this.onFirstInteraction, this);
+    input.on(Input.EventType.MOUSE_UP, this.onFirstInteraction, this);
+  }
+
+  private unbindFirstInteractionUnlock(): void {
+    if (!this.firstInteractionBound) {
+      return;
+    }
+    this.firstInteractionBound = false;
+    input.off(Input.EventType.TOUCH_END, this.onFirstInteraction, this);
+    input.off(Input.EventType.MOUSE_UP, this.onFirstInteraction, this);
+  }
+
+  private onFirstInteraction = (): void => {
+    this.unbindFirstInteractionUnlock();
+    this.handleUserGesture();
+  };
+
+  private preloadCoreClips(): void {
+    // Warm Settings click and BGM before any Settings interaction.
+    // loadClip deduplicates in-flight requests via loadingClips.
+    void this.loadClip(GameAudioCatalog.SettingsClickId);
+    void this.loadClip(GameAudioCatalog.DefaultMusicId);
+  }
+
+  private ensureAudioSources(): void {
+    let musicNode = this.node.getChildByName('MusicSource');
+    if (!musicNode) {
+      musicNode = new Node('MusicSource');
+      this.node.addChild(musicNode);
+    }
+    this.musicSource = musicNode.getComponent(AudioSource) ?? musicNode.addComponent(AudioSource);
+    this.musicSource.playOnAwake = false;
+    this.musicSource.loop = true;
+    this.musicSource.volume = VOLUME_MUSIC;
+
+    let voiceNode = this.node.getChildByName('VoiceSource');
+    if (!voiceNode) {
+      voiceNode = new Node('VoiceSource');
+      this.node.addChild(voiceNode);
+    }
+    this.voiceSource = voiceNode.getComponent(AudioSource) ?? voiceNode.addComponent(AudioSource);
+    this.voiceSource.playOnAwake = false;
+    this.voiceSource.loop = false;
+    this.voiceSource.volume = VOLUME_VOICE;
+
+    let sfxNode = this.node.getChildByName('SfxSource');
+    if (!sfxNode) {
+      sfxNode = new Node('SfxSource');
+      this.node.addChild(sfxNode);
+    }
+    this.sfxSource = sfxNode.getComponent(AudioSource) ?? sfxNode.addComponent(AudioSource);
+    this.sfxSource.playOnAwake = false;
+    this.sfxSource.loop = false;
+    this.sfxSource.volume = VOLUME_SOUND_EFFECTS;
+  }
+
+  private loadClip(id: GameAudioId): Promise<AudioClip | null> {
+    const cached = this.clipCache.get(id);
+    if (cached) {
+      return Promise.resolve(cached);
+    }
+
+    const inflight = this.loadingClips.get(id);
+    if (inflight) {
+      return inflight;
+    }
+
+    const path = GameAudioCatalog.getPath(id);
+    const category = GameAudioCatalog.getCategory(id);
+    if (!path || !category) {
+      console.error(`[AudioManager] Missing catalog entry for id=${id}`);
+      return Promise.resolve(null);
+    }
+
+    const promise = new Promise<AudioClip | null>((resolve) => {
+      resources.load(path, AudioClip, (error, clip) => {
+        this.loadingClips.delete(id);
+        if (error || !clip) {
+          console.error(
+            `[AudioManager] resources.load failed. id=${id} path=${path} category=${category}`,
+            error,
+          );
+          resolve(null);
+          return;
+        }
+        this.clipCache.set(id, clip);
+        resolve(clip);
+      });
+    });
+
+    this.loadingClips.set(id, promise);
+    return promise;
+  }
+
+  private loadSettingsFromStorage(): void {
+    try {
+      if (!sys.localStorage) {
+        this.applySettings(DEFAULT_SETTINGS);
+        return;
+      }
+      const raw = sys.localStorage.getItem(SETTINGS_STORAGE_KEY);
+      if (!raw) {
+        this.applySettings(DEFAULT_SETTINGS);
+        return;
+      }
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') {
+        this.applySettings(DEFAULT_SETTINGS);
+        return;
+      }
+      const record = parsed as Record<string, unknown>;
+      this.applySettings({
+        soundEnabled: typeof record.soundEnabled === 'boolean'
+          ? record.soundEnabled
+          : DEFAULT_SETTINGS.soundEnabled,
+        musicEnabled: typeof record.musicEnabled === 'boolean'
+          ? record.musicEnabled
+          : DEFAULT_SETTINGS.musicEnabled,
+        voiceEnabled: typeof record.voiceEnabled === 'boolean'
+          ? record.voiceEnabled
+          : DEFAULT_SETTINGS.voiceEnabled,
+      });
+    } catch (error: unknown) {
+      console.warn('[AudioManager] Failed to load audio settings; using defaults.', error);
+      this.applySettings(DEFAULT_SETTINGS);
+    }
+  }
+
+  private applySettings(settings: AudioSettingsState): void {
+    this.soundEnabled = settings.soundEnabled;
+    this.musicEnabled = settings.musicEnabled;
+    this.voiceEnabled = settings.voiceEnabled;
+  }
+
+  private persistSettings(): void {
+    const payload: AudioSettingsState = {
+      soundEnabled: this.soundEnabled,
+      musicEnabled: this.musicEnabled,
+      voiceEnabled: this.voiceEnabled,
+    };
+    try {
+      if (!sys.localStorage) {
+        return;
+      }
+      sys.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(payload));
+    } catch (error: unknown) {
+      console.warn('[AudioManager] Failed to persist audio settings.', error);
+    }
+  }
+}

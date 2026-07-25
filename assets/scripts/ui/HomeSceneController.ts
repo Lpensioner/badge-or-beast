@@ -1,4 +1,5 @@
 import { _decorator, Button, Component, Node, SceneAsset, Tween, UIOpacity, Vec3, director, tween } from 'cc';
+import { AudioManager } from '../audio/AudioManager';
 
 const { ccclass, property } = _decorator;
 
@@ -16,6 +17,12 @@ export class HomeSceneController extends Component {
 
     onLoad(): void {
         this.captureOriginalScaleIfNeeded();
+        this.ensureBackgroundMusicOnEnter();
+    }
+
+    start(): void {
+        // Scene is fully ready — request HomeScene BGM again in case early load raced resources.
+        this.ensureBackgroundMusicOnEnter();
     }
 
     onEnable(): void {
@@ -26,6 +33,7 @@ export class HomeSceneController extends Component {
 
         this.captureOriginalScaleIfNeeded();
         this.resetButtonState();
+        this.ensureBackgroundMusicOnEnter();
 
         this.startButton.off(Node.EventType.TOUCH_END, this.onStartButtonClick, this);
         this.startButton.on(Node.EventType.TOUCH_END, this.onStartButtonClick, this);
@@ -65,6 +73,7 @@ export class HomeSceneController extends Component {
             return;
         }
 
+        this.notifyAudioUserGesture();
         this.captureOriginalScaleIfNeeded();
 
         const startButtonNode = this.startButton;
@@ -164,5 +173,23 @@ export class HomeSceneController extends Component {
 
         this._originalButtonScale.set(this.startButton.scale);
         this._hasCapturedOriginalScale = true;
+    }
+
+    private ensureBackgroundMusicOnEnter(): void {
+        try {
+            const audio = AudioManager.ensureInstance();
+            audio.startHomeBackgroundMusic();
+        } catch (error: unknown) {
+            console.warn('[HomeSceneController] Failed to start background music on enter.', error);
+        }
+    }
+
+    private notifyAudioUserGesture(): void {
+        try {
+            const audio = AudioManager.ensureInstance();
+            audio.handleUserGesture();
+        } catch (error: unknown) {
+            console.warn('[HomeSceneController] AudioManager user gesture handling failed.', error);
+        }
     }
 }
