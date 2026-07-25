@@ -61,6 +61,8 @@ export class AudioManager extends Component {
   private desiredMusicId: MusicId | null = null;
   private musicRequestSerial = 0;
   private voiceRequestSerial = 0;
+  /** Wall-clock busy fence for Voice one-shots (AudioSource.playing may not track playOneShot). */
+  private voicePlaybackBusyUntilMs = 0;
 
   public static getInstance(): AudioManager | null {
     if (AudioManager.instance?.isValid) {
@@ -312,6 +314,7 @@ export class AudioManager extends Component {
 
   public stopVoice(): void {
     this.voiceRequestSerial += 1;
+    this.voicePlaybackBusyUntilMs = 0;
     if (this.voiceSource?.isValid) {
       this.voiceSource.stop();
     }
@@ -499,6 +502,61 @@ export class AudioManager extends Component {
   }
 
   /**
+   * Play alien dialogue voice using a pre-cached AudioClip only.
+   * Controlled by Voice Acting (voiceEnabled). Skips silently if not cached yet.
+   * Skips if Voice channel is already busy (no Alien/Complaint stacking).
+   */
+  public playCachedAlienVoice(): void {
+    this.playCachedVoiceClip(GameAudioCatalog.AlienVoiceId);
+  }
+
+  /**
+   * Play formal-complaint voice using a pre-cached AudioClip only.
+   * Controlled by Voice Acting (voiceEnabled). Skips silently if not cached yet.
+   * ComplaintEvent replaces any in-flight alien one-shot (no stacking).
+   */
+  public playCachedComplaintVoice(): void {
+    if (!this.voiceEnabled) {
+      return;
+    }
+    // End prior DialogueEvent audio before ComplaintEvent so the two never overlap.
+    this.stopVoice();
+    this.playCachedVoiceClip(GameAudioCatalog.ComplaintVoiceId);
+  }
+
+  private playCachedVoiceClip(id: GameAudioId): void {
+    if (!this.voiceEnabled) {
+      return;
+    }
+    const source = this.voiceSource;
+    if (!source?.isValid) {
+      return;
+    }
+    if (this.isVoiceChannelBusy(source)) {
+      return;
+    }
+    const clip = this.clipCache.get(id);
+    if (!clip) {
+      return;
+    }
+    source.playOneShot(clip, 1);
+    this.markVoiceChannelBusy(clip);
+  }
+
+  private isVoiceChannelBusy(source: AudioSource): boolean {
+    if (source.playing) {
+      return true;
+    }
+    return Date.now() < this.voicePlaybackBusyUntilMs;
+  }
+
+  private markVoiceChannelBusy(clip: AudioClip): void {
+    const durationSec = typeof clip.getDuration === 'function' ? clip.getDuration() : 0;
+    const durationMs = Math.max(50, Math.ceil(Math.max(0, durationSec) * 1000));
+    this.voicePlaybackBusyUntilMs = Date.now() + durationMs;
+  }
+
+  /**
    * Start looping alarm on the dedicated alarm AudioSource.
    * No-op if already playing or Sound Effects are off.
    */
@@ -616,7 +674,7 @@ export class AudioManager extends Component {
   };
 
   private preloadCoreClips(): void {
-    // Warm Settings click, document flip, shutter/alarm/drawer/phone/decision-mark, and BGM before interactions.
+    // Warm Settings click, document flip, shutter/alarm/drawer/phone/decision-mark, voice acting, and BGM before interactions.
     // loadClip deduplicates in-flight requests via loadingClips.
     void this.loadClip(GameAudioCatalog.SettingsClickId);
     void this.loadClip(GameAudioCatalog.DocumentFlipId);
@@ -626,6 +684,8 @@ export class AudioManager extends Component {
     void this.loadClip(GameAudioCatalog.PhoneDialId);
     void this.loadClip(GameAudioCatalog.PhoneConnectedId);
     void this.loadClip(GameAudioCatalog.DecisionMarkId);
+    void this.loadClip(GameAudioCatalog.AlienVoiceId);
+    void this.loadClip(GameAudioCatalog.ComplaintVoiceId);
     void this.loadClip(GameAudioCatalog.DefaultMusicId);
   }
 

@@ -15,6 +15,7 @@ import {
   UITransform,
   Vec3,
 } from 'cc';
+import { AudioManager } from '../audio/AudioManager';
 import { ShutterToggleController } from './ShutterToggleController';
 
 const { ccclass } = _decorator;
@@ -33,10 +34,19 @@ interface TransformStateCache {
   active: boolean;
 }
 
+/** Business message kind for Voice Acting routing. */
+export type VisitorMessageKind = 'dialogue' | 'complaint' | 'system';
+
 interface VisitorDialogueOptions {
   readonly autoCloseSeconds?: number;
   readonly allowTapDismiss?: boolean;
   readonly minimumVisibleSeconds?: number;
+  /**
+   * dialogue = character speech → Alien Voice
+   * complaint = character filing a complaint → Complaint Voice
+   * system = UI / system notification → no Voice Acting
+   */
+  readonly messageKind?: VisitorMessageKind;
 }
 
 @ccclass('VisitorIntroSequenceController')
@@ -229,6 +239,13 @@ export class VisitorIntroSequenceController extends Component {
 
     this.unschedule(this.handleGreetingAutoHide);
     this.unschedule(this.handleGreetingMinimumVisibleElapsed);
+    // Voice Acting by business event: dialogue → alien, complaint → complaint, system → silent.
+    const messageKind = options?.messageKind ?? 'dialogue';
+    if (messageKind === 'dialogue') {
+      AudioManager.getInstance()?.playCachedAlienVoice();
+    } else if (messageKind === 'complaint') {
+      AudioManager.getInstance()?.playCachedComplaintVoice();
+    }
     this.greetingLabel.string = text;
     this.greetingRuntime.active = true;
     this.isGreetingVisible = true;

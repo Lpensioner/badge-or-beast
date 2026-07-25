@@ -2065,7 +2065,12 @@ export class EvidencePreviewController extends Component {
 
   private async showDecisionDialogue(
     text: string,
-    options: { autoCloseSeconds: number; allowTapDismiss: boolean; minimumVisibleSeconds?: number },
+    options: {
+      autoCloseSeconds: number;
+      allowTapDismiss: boolean;
+      minimumVisibleSeconds?: number;
+      messageKind?: 'dialogue' | 'complaint' | 'system';
+    },
   ): Promise<void> {
     if (!this.visitorIntroController) {
       console.error('[InspectionDecision] VisitorIntroSequenceController is unavailable for dialogue.');
@@ -2181,10 +2186,13 @@ export class EvidencePreviewController extends Component {
   }
 
   private async showSystemNotice(text: string): Promise<void> {
+    // System notifications (FORMAL COMPLAINT FILED / SECURITY BREACH / etc.) must be silent.
+    AudioManager.getInstance()?.stopVoice();
     await this.showDecisionDialogue(text, {
       autoCloseSeconds: 1.25,
       allowTapDismiss: false,
       minimumVisibleSeconds: 0,
+      messageKind: 'system',
     });
   }
 
@@ -2255,6 +2263,14 @@ export class EvidencePreviewController extends Component {
         minimumVisibleSeconds: 0.35,
       });
     };
+    const showComplaintDialogue = async (pool: readonly string[]): Promise<void> => {
+      await this.showDecisionDialogue(this.pickRandomDialogue(pool), {
+        autoCloseSeconds: 1.8,
+        allowTapDismiss: true,
+        minimumVisibleSeconds: 0.35,
+        messageKind: 'complaint',
+      });
+    };
 
     switch (outcome) {
       case 'valid-human-allowed':
@@ -2263,7 +2279,7 @@ export class EvidencePreviewController extends Component {
         await this.completeNonCombatDecisionAndAdvance();
         return;
       case 'valid-human-wrongly-rejected':
-        await showStandardDialogue(this.validEmployeeWrongRejectDialoguePool);
+        await showComplaintDialogue(this.validEmployeeWrongRejectDialoguePool);
         if (!this.isDecisionResolutionTokenActive(token)) return;
         this.complaintCount += 1;
         if (this.complaintCount >= 2) {
@@ -2280,7 +2296,7 @@ export class EvidencePreviewController extends Component {
         await this.completeNonCombatDecisionAndAdvance();
         return;
       case 'invalid-human-wrongly-rejected':
-        await showStandardDialogue(this.employeeWrongRejectReasonDialoguePool);
+        await showComplaintDialogue(this.employeeWrongRejectReasonDialoguePool);
         if (!this.isDecisionResolutionTokenActive(token)) return;
         this.complaintCount += 1;
         if (this.complaintCount >= 2) {
@@ -2331,7 +2347,7 @@ export class EvidencePreviewController extends Component {
         this.startCarterThreatSequence(false);
         return;
       case 'monster-wrongly-rejected':
-        await showStandardDialogue(this.monsterWrongRejectReasonDialoguePool);
+        await showComplaintDialogue(this.monsterWrongRejectReasonDialoguePool);
         if (!this.isDecisionResolutionTokenActive(token)) return;
         this.complaintCount += 1;
         if (this.complaintCount >= 2) {
