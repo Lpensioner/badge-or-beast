@@ -1043,6 +1043,10 @@ export class EvidencePreviewController extends Component {
     AudioManager.getInstance()?.playCachedDocumentFlip();
   }
 
+  private playDecisionMarkSound(): void {
+    AudioManager.getInstance()?.playCachedDecisionMark();
+  }
+
   private openEmployeeCard(): void {
     if (
       this.previewOpen ||
@@ -1176,6 +1180,7 @@ export class EvidencePreviewController extends Component {
     if (!this.checklistInteractionReady) {
       return;
     }
+    this.playDecisionMarkSound();
     this.idCardChoice = this.idCardChoice === 'pass' ? 'unset' : 'pass';
     this.refreshChecklistVisuals();
   }
@@ -1184,6 +1189,7 @@ export class EvidencePreviewController extends Component {
     if (!this.checklistInteractionReady) {
       return;
     }
+    this.playDecisionMarkSound();
     this.idCardChoice = this.idCardChoice === 'fail' ? 'unset' : 'fail';
     this.refreshChecklistVisuals();
   }
@@ -1192,6 +1198,7 @@ export class EvidencePreviewController extends Component {
     if (!this.checklistInteractionReady) {
       return;
     }
+    this.playDecisionMarkSound();
     this.applicationChoice = this.applicationChoice === 'pass' ? 'unset' : 'pass';
     this.refreshChecklistVisuals();
   }
@@ -1200,6 +1207,7 @@ export class EvidencePreviewController extends Component {
     if (!this.checklistInteractionReady) {
       return;
     }
+    this.playDecisionMarkSound();
     this.applicationChoice = this.applicationChoice === 'fail' ? 'unset' : 'fail';
     this.refreshChecklistVisuals();
   }
@@ -1208,6 +1216,7 @@ export class EvidencePreviewController extends Component {
     if (!this.checklistInteractionReady) {
       return;
     }
+    this.playDecisionMarkSound();
     this.appearanceChoice = this.appearanceChoice === 'pass' ? 'unset' : 'pass';
     this.refreshChecklistVisuals();
   }
@@ -1216,6 +1225,7 @@ export class EvidencePreviewController extends Component {
     if (!this.checklistInteractionReady) {
       return;
     }
+    this.playDecisionMarkSound();
     this.appearanceChoice = this.appearanceChoice === 'fail' ? 'unset' : 'fail';
     this.refreshChecklistVisuals();
   }

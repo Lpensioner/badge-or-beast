@@ -480,6 +480,25 @@ export class AudioManager extends Component {
   }
 
   /**
+   * Play checklist decision-mark SFX using a pre-cached AudioClip only.
+   * Same clip for both check (√) and cross (×). Skips silently if not cached yet.
+   */
+  public playCachedDecisionMark(): void {
+    if (!this.soundEnabled) {
+      return;
+    }
+    const source = this.sfxSource;
+    if (!source?.isValid) {
+      return;
+    }
+    const clip = this.clipCache.get(GameAudioCatalog.DecisionMarkId);
+    if (!clip) {
+      return;
+    }
+    source.playOneShot(clip, 1);
+  }
+
+  /**
    * Start looping alarm on the dedicated alarm AudioSource.
    * No-op if already playing or Sound Effects are off.
    */
@@ -597,7 +616,7 @@ export class AudioManager extends Component {
   };
 
   private preloadCoreClips(): void {
-    // Warm Settings click, document flip, shutter/alarm/drawer/phone, and BGM before interactions.
+    // Warm Settings click, document flip, shutter/alarm/drawer/phone/decision-mark, and BGM before interactions.
     // loadClip deduplicates in-flight requests via loadingClips.
     void this.loadClip(GameAudioCatalog.SettingsClickId);
     void this.loadClip(GameAudioCatalog.DocumentFlipId);
@@ -606,6 +625,7 @@ export class AudioManager extends Component {
     void this.loadClip(GameAudioCatalog.DrawerMoveId);
     void this.loadClip(GameAudioCatalog.PhoneDialId);
     void this.loadClip(GameAudioCatalog.PhoneConnectedId);
+    void this.loadClip(GameAudioCatalog.DecisionMarkId);
     void this.loadClip(GameAudioCatalog.DefaultMusicId);
   }
 

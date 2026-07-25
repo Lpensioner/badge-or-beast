@@ -127,6 +127,8 @@ export class GameAudioCatalog {
   public static readonly DrawerMoveId = SoundEffectId.DrawerMove01;
   public static readonly PhoneDialId = SoundEffectId.PhoneDial01;
   public static readonly PhoneConnectedId = SoundEffectId.PhoneConnected01;
+  /** Shared mark SFX for checklist check (√) and cross (×). */
+  public static readonly DecisionMarkId = SoundEffectId.DecisionMark01;
 
   public static getPath(id: GameAudioId): string | null {
     return AUDIO_PATH_BY_ID.get(id) ?? null;
