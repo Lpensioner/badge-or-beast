@@ -107,12 +107,12 @@ export class AppointmentRosterController extends Component {
 
   onEnable(): void {
     this.appointmentRosterHitButton?.node.on(Button.EventType.CLICK, this.openAppointmentRoster, this);
-    this.appointmentRosterCloseButtonComp?.node.on(Button.EventType.CLICK, this.closeAppointmentRoster, this);
+    this.appointmentRosterCloseButtonComp?.node.on(Button.EventType.CLICK, this.onAppointmentRosterCloseClick, this);
   }
 
   onDisable(): void {
     this.appointmentRosterHitButton?.node.off(Button.EventType.CLICK, this.openAppointmentRoster, this);
-    this.appointmentRosterCloseButtonComp?.node.off(Button.EventType.CLICK, this.closeAppointmentRoster, this);
+    this.appointmentRosterCloseButtonComp?.node.off(Button.EventType.CLICK, this.onAppointmentRosterCloseClick, this);
   }
 
   private openAppointmentRoster(): void {
@@ -123,6 +123,12 @@ export class AppointmentRosterController extends Component {
     this.appointmentRosterPanelRuntime.active = true;
     this.rosterPanelOpen = true;
     this.setManagedButtonsInteractable(false);
+  }
+
+  /** Player-clicked X on appointment roster; play UI click then close. */
+  private onAppointmentRosterCloseClick(): void {
+    AudioManager.getInstance()?.playCachedSettingsClick();
+    this.closeAppointmentRoster();
   }
 
   private closeAppointmentRoster(): void {

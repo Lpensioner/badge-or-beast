@@ -602,6 +602,7 @@ export class EmployeeFilesController extends Component {
     }
 
     this.detailCloseHandler = (): void => {
+      AudioManager.getInstance()?.playCachedSettingsClick();
       this.closeFileDetail();
     };
     if (

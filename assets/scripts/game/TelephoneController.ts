@@ -241,7 +241,7 @@ export class TelephoneController extends Component {
 
   onEnable(): void {
     this.telephoneHitButton?.node.on(Button.EventType.CLICK, this.handleTelephoneHitClick, this);
-    this.phonePanelCloseHitButton?.node.on(Button.EventType.CLICK, this.closePhonePanel, this);
+    this.phonePanelCloseHitButton?.node.on(Button.EventType.CLICK, this.onPhonePanelCloseClick, this);
     this.phoneCallButton?.node.on(Button.EventType.CLICK, this.submitPhoneNumber, this);
     this.phoneHashBackspaceButton?.node.on(Button.EventType.CLICK, this.removeLastPhoneCharacter, this);
     for (const binding of this.keypadButtonBindings) {
@@ -267,7 +267,7 @@ export class TelephoneController extends Component {
     }
     this.restoreAllPhoneKeyVisualStates();
     this.telephoneHitButton?.node.off(Button.EventType.CLICK, this.handleTelephoneHitClick, this);
-    this.phonePanelCloseHitButton?.node.off(Button.EventType.CLICK, this.closePhonePanel, this);
+    this.phonePanelCloseHitButton?.node.off(Button.EventType.CLICK, this.onPhonePanelCloseClick, this);
     this.phoneCallButton?.node.off(Button.EventType.CLICK, this.submitPhoneNumber, this);
     this.phoneHashBackspaceButton?.node.off(Button.EventType.CLICK, this.removeLastPhoneCharacter, this);
     for (const binding of this.keypadButtonBindings) {
@@ -434,6 +434,12 @@ export class TelephoneController extends Component {
       this.phonePanelCloseHitButton.interactable = true;
     }
     this.setManagedButtonsInteractable(false);
+  }
+
+  /** Player-clicked X on phone panel; play UI click then close. */
+  private onPhonePanelCloseClick(): void {
+    AudioManager.getInstance()?.playCachedSettingsClick();
+    this.closePhonePanel();
   }
 
   private closePhonePanel(): void {

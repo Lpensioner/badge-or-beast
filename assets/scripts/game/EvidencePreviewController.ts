@@ -967,9 +967,9 @@ export class EvidencePreviewController extends Component {
     this.employeeCardHit?.on(Node.EventType.TOUCH_END, this.openEmployeeCard, this);
     this.applicationFormHit?.on(Node.EventType.TOUCH_END, this.openApplicationForm, this);
     this.screeningChecklistHit?.on(Node.EventType.TOUCH_END, this.openScreeningChecklist, this);
-    this.employeeCardCloseHit?.on(Node.EventType.TOUCH_END, this.closePreview, this);
-    this.applicationFormCloseHit?.on(Button.EventType.CLICK, this.closePreview, this);
-    this.screeningChecklistCloseHit?.on(Button.EventType.CLICK, this.closePreview, this);
+    this.employeeCardCloseHit?.on(Node.EventType.TOUCH_END, this.onClosePreviewClick, this);
+    this.applicationFormCloseHit?.on(Button.EventType.CLICK, this.onClosePreviewClick, this);
+    this.screeningChecklistCloseHit?.on(Button.EventType.CLICK, this.onClosePreviewClick, this);
     if (this.checklistInteractionReady) {
       this.idCardPassCell?.on(Button.EventType.CLICK, this.selectIdCardPass, this);
       this.idCardFailCell?.on(Button.EventType.CLICK, this.selectIdCardFail, this);
@@ -998,9 +998,9 @@ export class EvidencePreviewController extends Component {
     this.employeeCardHit?.off(Node.EventType.TOUCH_END, this.openEmployeeCard, this);
     this.applicationFormHit?.off(Node.EventType.TOUCH_END, this.openApplicationForm, this);
     this.screeningChecklistHit?.off(Node.EventType.TOUCH_END, this.openScreeningChecklist, this);
-    this.employeeCardCloseHit?.off(Node.EventType.TOUCH_END, this.closePreview, this);
-    this.applicationFormCloseHit?.off(Button.EventType.CLICK, this.closePreview, this);
-    this.screeningChecklistCloseHit?.off(Button.EventType.CLICK, this.closePreview, this);
+    this.employeeCardCloseHit?.off(Node.EventType.TOUCH_END, this.onClosePreviewClick, this);
+    this.applicationFormCloseHit?.off(Button.EventType.CLICK, this.onClosePreviewClick, this);
+    this.screeningChecklistCloseHit?.off(Button.EventType.CLICK, this.onClosePreviewClick, this);
     if (this.checklistInteractionReady) {
       this.idCardPassCell?.off(Button.EventType.CLICK, this.selectIdCardPass, this);
       this.idCardFailCell?.off(Button.EventType.CLICK, this.selectIdCardFail, this);
@@ -1143,6 +1143,12 @@ export class EvidencePreviewController extends Component {
     }
     this.setManagedButtonsInteractable(false);
     this.previewOpen = true;
+  }
+
+  /** Player-clicked X on document preview; play UI click then close. */
+  private onClosePreviewClick(): void {
+    AudioManager.getInstance()?.playCachedSettingsClick();
+    this.closePreview();
   }
 
   private closePreview(): void {
