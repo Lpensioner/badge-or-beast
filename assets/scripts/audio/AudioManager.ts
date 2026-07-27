@@ -502,6 +502,48 @@ export class AudioManager extends Component {
   }
 
   /**
+   * Play character enter/exit footstep SFX using a pre-cached AudioClip only.
+   * If the clip is not cached yet, skips silently (never late catch-up playback).
+   *
+   * Uses the shared SfxSource main channel (stop + play) instead of playOneShot so
+   * a previous footstep can be cut before the next enter/exit. playOneShot cannot be
+   * stopped and would otherwise stack exit+next-enter into one long trail.
+   */
+  public playCachedFootsteps(): void {
+    if (!this.soundEnabled) {
+      return;
+    }
+    const source = this.sfxSource;
+    if (!source?.isValid) {
+      return;
+    }
+    const clip = this.clipCache.get(GameAudioCatalog.FootstepsId);
+    if (!clip) {
+      return;
+    }
+    source.stop();
+    source.clip = clip;
+    source.loop = false;
+    source.volume = VOLUME_SOUND_EFFECTS;
+    source.play();
+  }
+
+  /** Stop an in-flight footstep on the shared SFX channel, if that is what is playing. */
+  public stopCachedFootsteps(): void {
+    const source = this.sfxSource;
+    if (!source?.isValid) {
+      return;
+    }
+    const foot = this.clipCache.get(GameAudioCatalog.FootstepsId);
+    if (!foot || source.clip !== foot) {
+      return;
+    }
+    if (source.playing) {
+      source.stop();
+    }
+  }
+
+  /**
    * Play alien dialogue voice using a pre-cached AudioClip only.
    * Controlled by Voice Acting (voiceEnabled). Skips silently if not cached yet.
    * Skips if Voice channel is already busy (no Alien/Complaint stacking).
@@ -674,7 +716,8 @@ export class AudioManager extends Component {
   };
 
   private preloadCoreClips(): void {
-    // Warm Settings click, document flip, shutter/alarm/drawer/phone/decision-mark, voice acting, and BGM before interactions.
+    // Warm Settings click, document flip, shutter/alarm/drawer/phone/decision-mark,
+    // footsteps, voice acting, and BGM before interactions.
     // loadClip deduplicates in-flight requests via loadingClips.
     void this.loadClip(GameAudioCatalog.SettingsClickId);
     void this.loadClip(GameAudioCatalog.DocumentFlipId);
@@ -684,6 +727,7 @@ export class AudioManager extends Component {
     void this.loadClip(GameAudioCatalog.PhoneDialId);
     void this.loadClip(GameAudioCatalog.PhoneConnectedId);
     void this.loadClip(GameAudioCatalog.DecisionMarkId);
+    void this.loadClip(GameAudioCatalog.FootstepsId);
     void this.loadClip(GameAudioCatalog.AlienVoiceId);
     void this.loadClip(GameAudioCatalog.ComplaintVoiceId);
     void this.loadClip(GameAudioCatalog.DefaultMusicId);

@@ -109,6 +109,8 @@ export class VisitorIntroSequenceController extends Component {
   private currentDialogueMinimumVisibleElapsed = true;
   private preparedCharacterFrame: SpriteFrame | null = null;
   private sequenceCompletion: (() => void) | null = null;
+  private exitPlaying = false;
+  private exitCompletion: (() => void) | null = null;
 
   private readonly handleGreetingDismissClick = (): void => {
     if (!this.allowCurrentDialogueTapDismiss || !this.currentDialogueMinimumVisibleElapsed) {
@@ -205,6 +207,61 @@ export class VisitorIntroSequenceController extends Component {
     this.sequenceCompletion = onComplete ?? null;
     this.playIntroSequence();
     return true;
+  }
+
+  /**
+   * Walk the character out of the window to the right, then hide and snap back to the
+   * cached window-center pose (so the next intro can cacheFinalStates correctly).
+   * Footsteps play once at the start of a valid exit move. No-op if already hidden.
+   */
+  public playCharacterExit(): Promise<void> {
+    return new Promise((resolve) => {
+      if (
+        !this.ready ||
+        this.isDestroying ||
+        !this.carterCharacter ||
+        !this.viewportUi ||
+        !this.characterUi ||
+        !isValid(this.carterCharacter, true)
+      ) {
+        resolve();
+        return;
+      }
+      if (!this.carterCharacter.active) {
+        resolve();
+        return;
+      }
+      if (this.exitPlaying) {
+        const previous = this.exitCompletion;
+        this.exitCompletion = () => {
+          previous?.();
+          resolve();
+        };
+        return;
+      }
+
+      this.exitPlaying = true;
+      this.exitCompletion = resolve;
+      Tween.stopAllByTarget(this.carterCharacter);
+
+      const endX =
+        this.viewportUi.contentSize.width / 2 +
+        this.characterUi.contentSize.width / 2 +
+        20;
+      const current = this.carterCharacter.position;
+      const target = new Vec3(endX, current.y, current.z);
+
+      // Bind SFX to the move-animation start (not buttons / dialogue / sprite swaps).
+      AudioManager.getInstance()?.playCachedFootsteps();
+
+      tween(this.carterCharacter)
+        .to(0.54, { position: target }, { easing: 'cubicIn' })
+        .call(() => {
+          this.settleCharacterAfterExit();
+          this.finishCharacterExit();
+        })
+        .start();
+    });
   }
 
   public showVisitorDialogue(text: string, options?: VisitorDialogueOptions): Promise<void> {
@@ -456,8 +513,14 @@ export class VisitorIntroSequenceController extends Component {
     ) {
       return;
     }
+    // Bind SFX to the move-animation start (not dialogue / sprite swaps / teleport resets).
+    AudioManager.getInstance()?.playCachedFootsteps();
     tween(this.carterCharacter)
       .to(0.54, { position: this.carterFinalState.position.clone() }, { easing: 'cubicOut' })
+      .call(() => {
+        // End footsteps with the move so the clip cannot trail into idle / later SFX.
+        AudioManager.getInstance()?.stopCachedFootsteps();
+      })
       .start();
   }
 
@@ -755,6 +818,7 @@ export class VisitorIntroSequenceController extends Component {
   }
 
   private stopAllTweens(): void {
+    const wasExiting = this.exitPlaying;
     if (isValid(this.node, true)) {
       Tween.stopAllByTarget(this.node);
     }
@@ -767,6 +831,33 @@ export class VisitorIntroSequenceController extends Component {
     if (this.applicationFormVisual && isValid(this.applicationFormVisual, true)) {
       Tween.stopAllByTarget(this.applicationFormVisual);
     }
+    if (wasExiting) {
+      this.settleCharacterAfterExit();
+      this.finishCharacterExit();
+    }
+  }
+
+  private settleCharacterAfterExit(): void {
+    // Cut exit footsteps before the next intro can start another footstep.
+    AudioManager.getInstance()?.stopCachedFootsteps();
+    if (!this.carterCharacter || !isValid(this.carterCharacter, true)) {
+      return;
+    }
+    // Snap back to window-center pose while hidden so the next subject's
+    // cacheFinalStates does not capture the off-screen exit position.
+    if (this.carterFinalState) {
+      this.carterCharacter.setPosition(this.carterFinalState.position.clone());
+      this.carterCharacter.setScale(this.carterFinalState.scale.clone());
+      this.carterCharacter.setRotation(this.carterFinalState.rotation.clone());
+    }
+    this.carterCharacter.active = false;
+  }
+
+  private finishCharacterExit(): void {
+    this.exitPlaying = false;
+    const completion = this.exitCompletion;
+    this.exitCompletion = null;
+    completion?.();
   }
 
   private applyPreparedFrames(): boolean {

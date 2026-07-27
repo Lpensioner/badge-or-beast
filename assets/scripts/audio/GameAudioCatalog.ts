@@ -133,6 +133,8 @@ export class GameAudioCatalog {
   public static readonly AlienVoiceId = VoiceId.AlienSpeech01;
   /** Formal complaint voice when a wrong rejection files a complaint. */
   public static readonly ComplaintVoiceId = VoiceId.Complaint01;
+  /** Character enter/exit footstep SFX. */
+  public static readonly FootstepsId = SoundEffectId.Footsteps01;
 
   public static getPath(id: GameAudioId): string | null {
     return AUDIO_PATH_BY_ID.get(id) ?? null;

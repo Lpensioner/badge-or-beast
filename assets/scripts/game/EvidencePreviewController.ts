@@ -2227,9 +2227,6 @@ export class EvidencePreviewController extends Component {
     if (this.visitorGreetingRuntime?.isValid) {
       this.visitorGreetingRuntime.active = false;
     }
-    if (this.carterCharacter?.isValid) {
-      this.carterCharacter.active = false;
-    }
     this.previewOpen = false;
     this.checklistQuestionPanelOpen = false;
     this.checklistReplyPanelOpen = false;
@@ -2239,6 +2236,17 @@ export class EvidencePreviewController extends Component {
     this.refreshChecklistActionState();
     this.resetInspectionRoundForNextSubject();
     this.inspectionDecisionResolutionInProgress = true;
+
+    // Shared exit entry for ALLOW / DENY / complaint / protocol-violation advances:
+    // footsteps are bound inside playCharacterExit at move-animation start.
+    if (this.visitorIntroController) {
+      await this.visitorIntroController.playCharacterExit();
+    } else if (this.carterCharacter?.isValid) {
+      this.carterCharacter.active = false;
+    }
+    if (this.isDestroying) {
+      return;
+    }
 
     const advanced = this.advanceToNextInspectionSubject();
     if (!advanced) {
