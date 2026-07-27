@@ -123,6 +123,7 @@ export class SettingsPanelController extends Component {
 
     this.settingsPanel = this.settingsOverlay.getChildByName(SETTINGS_PANEL_NAME);
     this.returnHomeButton = this.settingsPanel?.getChildByName('ReturnHomeButton') ?? null;
+    this.sanitizeCloseButtonHotspot();
 
     this.settingsButtonComp = this.settingsButton.getComponent(Button);
     this.closeButtonComp = this.settingsPanel?.getChildByName('CloseButton')?.getComponent(Button) ?? null;
@@ -218,45 +219,43 @@ export class SettingsPanelController extends Component {
   }
 
   private createCloseButton(panel: Node): void {
+    // Transparent hotspot over the X baked into the panel background art.
     const closeButton = new Node('CloseButton');
     panel.addChild(closeButton);
     closeButton.layer = panel.layer;
-    closeButton.addComponent(UITransform).setContentSize(64, 64);
-
-    const visual = new Node('CloseVisual');
-    closeButton.addChild(visual);
-    visual.layer = panel.layer;
-    visual.addComponent(UITransform).setContentSize(64, 64);
-    const graphics = visual.addComponent(Graphics);
-    graphics.clear();
-    graphics.fillColor = new Color(25, 23, 20, 220);
-    graphics.rect(-32, -32, 64, 64);
-    graphics.fill();
-    graphics.lineWidth = 3;
-    graphics.strokeColor = new Color(230, 220, 195, 255);
-    graphics.rect(-32, -32, 64, 64);
-    graphics.stroke();
-
-    const labelNode = new Node('CloseLabel');
-    closeButton.addChild(labelNode);
-    labelNode.layer = panel.layer;
-    labelNode.addComponent(UITransform).setContentSize(56, 56);
-    const label = labelNode.addComponent(Label);
-    label.string = '×';
-    label.fontSize = 42;
-    label.lineHeight = 48;
-    label.horizontalAlign = Label.HorizontalAlign.CENTER;
-    label.verticalAlign = Label.VerticalAlign.CENTER;
-    label.color = new Color(230, 220, 195, 255);
-    label.useSystemFont = true;
-    label.fontFamily = 'Arial';
-    label.overflow = Label.Overflow.CLAMP;
+    closeButton.addComponent(UITransform).setContentSize(72, 72);
 
     const button = closeButton.addComponent(Button);
-    button.transition = Button.Transition.SCALE;
-    button.zoomScale = 0.94;
-    button.duration = 0.08;
+    button.transition = Button.Transition.NONE;
     button.target = closeButton;
+  }
+
+  /** Strip any leftover CloseButton visuals so only the bg X is shown. */
+  private sanitizeCloseButtonHotspot(): void {
+    const closeButton = this.settingsPanel?.getChildByName('CloseButton');
+    if (!closeButton?.isValid) {
+      return;
+    }
+
+    const visual = closeButton.getChildByName('CloseVisual');
+    if (visual?.isValid) {
+      visual.destroy();
+    }
+    const label = closeButton.getChildByName('CloseLabel');
+    if (label?.isValid) {
+      label.destroy();
+    }
+
+    const transform = closeButton.getComponent(UITransform);
+    if (transform) {
+      transform.setContentSize(72, 72);
+    }
+
+    const button = closeButton.getComponent(Button);
+    if (button) {
+      button.transition = Button.Transition.NONE;
+      button.target = closeButton;
+    }
   }
 
   private createMenuRow(panel: Node, name: string, text: string): void {
@@ -352,9 +351,10 @@ export class SettingsPanelController extends Component {
     const paperBottom = -panelHeight * 0.34;
     const paperCenterY = (paperTop + paperBottom) * 0.5;
 
+    // Align transparent hotspot with the X on the clipboard frame (top-right).
     const closeButton = this.settingsPanel.getChildByName('CloseButton');
     if (closeButton) {
-      closeButton.setPosition(panelWidth * 0.28, paperTop - 8, 0);
+      closeButton.setPosition(panelWidth * 0.404, panelHeight * 0.309, 0);
     }
 
     const rowNames = ['SoundRow', 'MusicRow', 'VoiceRow'];
