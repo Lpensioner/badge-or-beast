@@ -74,6 +74,7 @@ export class HomeSceneController extends Component {
         }
 
         this.notifyAudioUserGesture();
+        AudioManager.getInstance()?.playCachedSettingsClick();
         this.captureOriginalScaleIfNeeded();
 
         const startButtonNode = this.startButton;

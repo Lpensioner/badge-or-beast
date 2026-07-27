@@ -275,8 +275,6 @@ export class ShutterToggleController extends Component {
         }
 
         const targetClosed = !this.isClosedState;
-        // Play shared shutter move SFX after a valid click, before animation starts.
-        AudioManager.getInstance()?.playCachedShutterMove();
         this.animateTo(targetClosed, 0.34);
         if (targetClosed) {
             this.notifyUserCloseAccepted();
@@ -372,6 +370,12 @@ export class ShutterToggleController extends Component {
     private animateTo(closed: boolean, duration: number, onComplete?: () => void): void {
         if (!this.shutterVisual || this.damagedVisualActive) {
             return;
+        }
+
+        // Lifecycle-driven shutter SFX: play once when a new open/close animation starts.
+        // Skip while already animating to avoid duplicate playback on re-entrant calls.
+        if (!this.isAnimating) {
+            AudioManager.getInstance()?.playCachedShutterMove();
         }
 
         const target = closed ? this.closedPosition : this.openPosition;
