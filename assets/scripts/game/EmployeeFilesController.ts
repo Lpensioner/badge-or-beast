@@ -18,6 +18,7 @@ import {
   hideInteractivePanelImmediate,
   showInteractivePanel,
 } from './InteractivePanelTransition';
+import { AudioManager } from '../audio/AudioManager';
 
 const { ccclass } = _decorator;
 
@@ -710,6 +711,7 @@ export class EmployeeFilesController extends Component {
     }
 
     this.detailCloseHandler = (): void => {
+      AudioManager.getInstance()?.playCachedSettingsClick();
       this.closeFileDetail();
     };
     if (
@@ -801,6 +803,8 @@ export class EmployeeFilesController extends Component {
       return;
     }
 
+    AudioManager.getInstance()?.playCachedDrawerMove();
+
     this.isAnimating = true;
     this.currentOpenIndex = index;
     this.openVisuals[index].active = true;
@@ -833,6 +837,8 @@ export class EmployeeFilesController extends Component {
     if (!this.ready || this.isAnimating || this.isDestroying || !this.isControllerAlive()) {
       return;
     }
+
+    AudioManager.getInstance()?.playCachedDrawerMove();
 
     this.isAnimating = true;
     this.fileHits[index].active = false;
@@ -910,6 +916,8 @@ export class EmployeeFilesController extends Component {
     if (index !== this.currentOpenIndex) {
       return;
     }
+
+    AudioManager.getInstance()?.playCachedDocumentFlip();
     this.setDrawerButtonsInteractable(false);
 
     for (const fileHit of this.fileHits) {
@@ -1536,6 +1544,10 @@ export class EmployeeFilesController extends Component {
     if (maxTabIndex < 0 || tabIndex < 0 || tabIndex > maxTabIndex) {
       return;
     }
+    if (tabIndex === this.activeEmployeeFileTabIndex) {
+      return;
+    }
+    AudioManager.getInstance()?.playCachedDocumentFlip();
     if (!this.applyEmployeeFileEntry(this.activeEmployeeFileDrawerIndex, tabIndex)) {
       return;
     }

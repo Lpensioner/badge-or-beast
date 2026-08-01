@@ -10,6 +10,7 @@ import {
     UITransform,
     Vec3,
 } from 'cc';
+import { AudioManager } from '../audio/AudioManager';
 
 const { ccclass, property } = _decorator;
 
@@ -371,6 +372,12 @@ export class ShutterToggleController extends Component {
             return;
         }
 
+        // Lifecycle-driven shutter SFX: play once when a new open/close animation starts.
+        // Skip while already animating to avoid duplicate playback on re-entrant calls.
+        if (!this.isAnimating) {
+            AudioManager.getInstance()?.playCachedShutterMove();
+        }
+
         const target = closed ? this.closedPosition : this.openPosition;
 
         this.stopShutterTween();
@@ -386,7 +393,10 @@ export class ShutterToggleController extends Component {
                 this.animationTargetClosed = null;
                 if (closed) {
                     this.shutterVisual?.setPosition(this.closedPosition);
+                    AudioManager.getInstance()?.startAlarmLoop();
                     this.notifyShutterClosedSettled();
+                } else {
+                    AudioManager.getInstance()?.stopAlarmLoop();
                 }
                 this.syncButtonInteractable();
                 if (closed && this.pendingDamagedVisual) {

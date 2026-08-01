@@ -1,5 +1,5 @@
-import {
-  _decorator,
+0import {
+                             _decorator,
   assetManager,
   BlockInputEvents,
   Button,
@@ -20,6 +20,7 @@ import {
   resources,
   tween,
 } from 'cc';
+import { AudioManager } from '../audio/AudioManager';
 import { ShutterToggleController } from './ShutterToggleController';
 import { TelephoneController } from './TelephoneController';
 import { AppointmentRosterController } from './AppointmentRosterController';
@@ -1685,9 +1686,9 @@ export class EvidencePreviewController extends Component {
     this.employeeCardHit?.on(Node.EventType.TOUCH_END, this.openEmployeeCard, this);
     this.applicationFormHit?.on(Node.EventType.TOUCH_END, this.openApplicationForm, this);
     this.screeningChecklistHit?.on(Node.EventType.TOUCH_END, this.openScreeningChecklist, this);
-    this.employeeCardCloseHit?.on(Node.EventType.TOUCH_END, this.closePreview, this);
-    this.applicationFormCloseHit?.on(Button.EventType.CLICK, this.closePreview, this);
-    this.screeningChecklistCloseHit?.on(Button.EventType.CLICK, this.closePreview, this);
+    this.employeeCardCloseHit?.on(Node.EventType.TOUCH_END, this.onClosePreviewClick, this);
+    this.applicationFormCloseHit?.on(Button.EventType.CLICK, this.onClosePreviewClick, this);
+    this.screeningChecklistCloseHit?.on(Button.EventType.CLICK, this.onClosePreviewClick, this);
     if (this.checklistInteractionReady) {
       this.idCardPassCell?.on(Button.EventType.CLICK, this.selectIdCardPass, this);
       this.idCardFailCell?.on(Button.EventType.CLICK, this.selectIdCardFail, this);
@@ -1728,9 +1729,9 @@ export class EvidencePreviewController extends Component {
     this.employeeCardHit?.off(Node.EventType.TOUCH_END, this.openEmployeeCard, this);
     this.applicationFormHit?.off(Node.EventType.TOUCH_END, this.openApplicationForm, this);
     this.screeningChecklistHit?.off(Node.EventType.TOUCH_END, this.openScreeningChecklist, this);
-    this.employeeCardCloseHit?.off(Node.EventType.TOUCH_END, this.closePreview, this);
-    this.applicationFormCloseHit?.off(Button.EventType.CLICK, this.closePreview, this);
-    this.screeningChecklistCloseHit?.off(Button.EventType.CLICK, this.closePreview, this);
+    this.employeeCardCloseHit?.off(Node.EventType.TOUCH_END, this.onClosePreviewClick, this);
+    this.applicationFormCloseHit?.off(Button.EventType.CLICK, this.onClosePreviewClick, this);
+    this.screeningChecklistCloseHit?.off(Button.EventType.CLICK, this.onClosePreviewClick, this);
     if (this.checklistInteractionReady) {
       this.idCardPassCell?.off(Button.EventType.CLICK, this.selectIdCardPass, this);
       this.idCardFailCell?.off(Button.EventType.CLICK, this.selectIdCardFail, this);
@@ -3039,6 +3040,14 @@ export class EvidencePreviewController extends Component {
     }
   }
 
+  private playDocumentFlipSound(): void {
+    AudioManager.getInstance()?.playCachedDocumentFlip();
+  }
+
+  private playDecisionMarkSound(): void {
+    AudioManager.getInstance()?.playCachedDecisionMark();
+  }
+
   private openEmployeeCard(): void {
     if (
       !this.isCampaignEvidenceEnabled('employee-card') ||
@@ -3051,6 +3060,7 @@ export class EvidencePreviewController extends Component {
       return;
     }
 
+    this.playDocumentFlipSound();
     this.drawScrim(0);
     if (this.checklistQuestionPanelRuntime) {
       this.checklistQuestionPanelRuntime.active = false;
@@ -3084,6 +3094,7 @@ export class EvidencePreviewController extends Component {
       return;
     }
 
+    this.playDocumentFlipSound();
     this.drawScrim(170);
     if (this.checklistQuestionPanelRuntime) {
       this.checklistQuestionPanelRuntime.active = false;
@@ -3116,6 +3127,7 @@ export class EvidencePreviewController extends Component {
       return;
     }
 
+    this.playDocumentFlipSound();
     this.drawScrim(170);
     if (this.checklistQuestionPanelRuntime) {
       this.checklistQuestionPanelRuntime.active = false;
@@ -3140,6 +3152,12 @@ export class EvidencePreviewController extends Component {
     }
     this.setManagedButtonsInteractable(false);
     this.previewOpen = true;
+  }
+
+  /** Player-clicked X on document preview; play UI click then close. */
+  private onClosePreviewClick(): void {
+    AudioManager.getInstance()?.playCachedSettingsClick();
+    this.closePreview();
   }
 
   private closePreview(): void {
@@ -3191,6 +3209,7 @@ export class EvidencePreviewController extends Component {
     if (!this.checklistInteractionReady || !this.isChecklistItemRequired('id_card')) {
       return;
     }
+    this.playDecisionMarkSound();
     this.idCardChoice = this.idCardChoice === 'pass' ? 'unset' : 'pass';
     this.refreshChecklistVisuals();
   }
@@ -3199,6 +3218,7 @@ export class EvidencePreviewController extends Component {
     if (!this.checklistInteractionReady || !this.isChecklistItemRequired('id_card')) {
       return;
     }
+    this.playDecisionMarkSound();
     this.idCardChoice = this.idCardChoice === 'fail' ? 'unset' : 'fail';
     this.refreshChecklistVisuals();
   }
@@ -3207,6 +3227,7 @@ export class EvidencePreviewController extends Component {
     if (!this.checklistInteractionReady || !this.isChecklistItemRequired('application')) {
       return;
     }
+    this.playDecisionMarkSound();
     this.applicationChoice = this.applicationChoice === 'pass' ? 'unset' : 'pass';
     this.refreshChecklistVisuals();
   }
@@ -3215,6 +3236,7 @@ export class EvidencePreviewController extends Component {
     if (!this.checklistInteractionReady || !this.isChecklistItemRequired('application')) {
       return;
     }
+    this.playDecisionMarkSound();
     this.applicationChoice = this.applicationChoice === 'fail' ? 'unset' : 'fail';
     this.refreshChecklistVisuals();
   }
@@ -3223,6 +3245,7 @@ export class EvidencePreviewController extends Component {
     if (!this.checklistInteractionReady || !this.isChecklistItemRequired('appearance')) {
       return;
     }
+    this.playDecisionMarkSound();
     this.appearanceChoice = this.appearanceChoice === 'pass' ? 'unset' : 'pass';
     this.refreshChecklistVisuals();
   }
@@ -3231,6 +3254,7 @@ export class EvidencePreviewController extends Component {
     if (!this.checklistInteractionReady || !this.isChecklistItemRequired('appearance')) {
       return;
     }
+    this.playDecisionMarkSound();
     this.appearanceChoice = this.appearanceChoice === 'fail' ? 'unset' : 'fail';
     this.refreshChecklistVisuals();
   }
@@ -4416,7 +4440,12 @@ export class EvidencePreviewController extends Component {
 
   private async showDecisionDialogue(
     text: string,
-    options: { autoCloseSeconds: number; allowTapDismiss: boolean; minimumVisibleSeconds?: number },
+    options: {
+      autoCloseSeconds: number;
+      allowTapDismiss: boolean;
+      minimumVisibleSeconds?: number;
+      messageKind?: 'dialogue' | 'complaint' | 'system';
+    },
   ): Promise<void> {
     if (!this.visitorIntroController) {
       console.error('[InspectionDecision] VisitorIntroSequenceController is unavailable for dialogue.');
@@ -4709,10 +4738,13 @@ export class EvidencePreviewController extends Component {
   }
 
   private async showSystemNotice(text: string): Promise<void> {
+    // System notifications (FORMAL COMPLAINT FILED / SECURITY BREACH / etc.) must be silent.
+    AudioManager.getInstance()?.stopVoice();
     await this.showDecisionDialogue(text, {
       autoCloseSeconds: 1.25,
       allowTapDismiss: false,
       minimumVisibleSeconds: 0,
+      messageKind: 'system',
     });
   }
 
@@ -4741,9 +4773,6 @@ export class EvidencePreviewController extends Component {
     if (this.visitorGreetingRuntime?.isValid) {
       this.visitorGreetingRuntime.active = false;
     }
-    if (this.carterCharacter?.isValid) {
-      this.carterCharacter.active = false;
-    }
     this.previewOpen = false;
     this.checklistQuestionPanelOpen = false;
     this.checklistReplyPanelOpen = false;
@@ -4758,6 +4787,17 @@ export class EvidencePreviewController extends Component {
     }
     this.resetInspectionRoundForNextSubject();
     this.inspectionDecisionResolutionInProgress = true;
+
+    // Shared exit entry for ALLOW / DENY / complaint / protocol-violation advances:
+    // footsteps are bound inside playCharacterExit at move-animation start.
+    if (this.visitorIntroController) {
+      await this.visitorIntroController.playCharacterExit();
+    } else if (this.carterCharacter?.isValid) {
+      this.carterCharacter.active = false;
+    }
+    if (this.isDestroying) {
+      return;
+    }
 
     const advanced = this.advanceToNextInspectionSubject();
     if (!advanced) {
@@ -4841,6 +4881,14 @@ export class EvidencePreviewController extends Component {
         autoCloseSeconds: 1.8,
         allowTapDismiss: true,
         minimumVisibleSeconds: 0.35,
+      });
+    };
+    const showComplaintDialogue = async (pool: readonly string[]): Promise<void> => {
+      await this.showDecisionDialogue(this.pickRandomDialogue(pool), {
+        autoCloseSeconds: 1.8,
+        allowTapDismiss: true,
+        minimumVisibleSeconds: 0.35,
+        messageKind: 'complaint',
       });
     };
 
@@ -5395,6 +5443,7 @@ export class EvidencePreviewController extends Component {
     if (this.cleanupProgramActivated || this.phoneEmergencyResolved) {
       return;
     }
+    AudioManager.getInstance()?.playCachedPhoneConnected();
     this.cleanupProgramActivated = true;
     this.phoneEmergencyResolved = true;
     this.phoneResponseWindowOpen = false;
@@ -5603,8 +5652,10 @@ export class EvidencePreviewController extends Component {
       this.carterCharacter.active = true;
     }
     this.restoreCarterCharacterBaseSize();
-    this.shutterController?.restoreNormalVisual();
-    this.shutterController?.setInteractionEnabled(this.getCachedButtonInteractable('BtnShutterHit'));
+    if (this.shutterController?.isValid) {
+      this.shutterController.restoreNormalVisual();
+      this.shutterController.setInteractionEnabled(this.getCachedButtonInteractable('BtnShutterHit'));
+    }
 
     if (restoreButtons) {
       if (this.encounterButtonStateCache.size > 0) {
@@ -5806,7 +5857,8 @@ export class EvidencePreviewController extends Component {
   }
 
   private restoreCarterCharacterBaseSize(): void {
-    if (!this.carterCharacterUi) {
+    // Scene unload may leave a stale UITransform whose _contentSize is already null.
+    if (!this.carterCharacterUi?.isValid) {
       return;
     }
     if (this.carterCharacterBaseWidth <= 0 || this.carterCharacterBaseHeight <= 0) {

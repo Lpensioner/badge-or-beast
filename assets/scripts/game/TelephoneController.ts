@@ -25,6 +25,7 @@ import {
   hideInteractivePanelImmediate,
   showInteractivePanel,
 } from './InteractivePanelTransition';
+import { AudioManager } from '../audio/AudioManager';
 
 const { ccclass } = _decorator;
 
@@ -308,7 +309,7 @@ export class TelephoneController extends Component {
 
   onEnable(): void {
     this.telephoneHitButton?.node.on(Button.EventType.CLICK, this.handleTelephoneHitClick, this);
-    this.phonePanelCloseHitButton?.node.on(Button.EventType.CLICK, this.closePhonePanel, this);
+    this.phonePanelCloseHitButton?.node.on(Button.EventType.CLICK, this.onPhonePanelCloseClick, this);
     this.phoneCallButton?.node.on(Button.EventType.CLICK, this.submitPhoneNumber, this);
     this.phoneHashBackspaceButton?.node.on(Button.EventType.CLICK, this.removeLastPhoneCharacter, this);
     for (const binding of this.keypadButtonBindings) {
@@ -325,14 +326,16 @@ export class TelephoneController extends Component {
   }
 
   onDisable(): void {
-    for (const state of this.phoneKeyVisualStates.values()) {
-      state.node.off(Node.EventType.TOUCH_START, this.onPhoneKeyTouchStart, this);
-      state.node.off(Node.EventType.TOUCH_END, this.onPhoneKeyTouchEnd, this);
-      state.node.off(Node.EventType.TOUCH_CANCEL, this.onPhoneKeyTouchCancel, this);
+    if (this.phoneKeyVisualStates) {
+      for (const state of this.phoneKeyVisualStates.values()) {
+        state.node.off(Node.EventType.TOUCH_START, this.onPhoneKeyTouchStart, this);
+        state.node.off(Node.EventType.TOUCH_END, this.onPhoneKeyTouchEnd, this);
+        state.node.off(Node.EventType.TOUCH_CANCEL, this.onPhoneKeyTouchCancel, this);
+      }
     }
     this.restoreAllPhoneKeyVisualStates();
     this.telephoneHitButton?.node.off(Button.EventType.CLICK, this.handleTelephoneHitClick, this);
-    this.phonePanelCloseHitButton?.node.off(Button.EventType.CLICK, this.closePhonePanel, this);
+    this.phonePanelCloseHitButton?.node.off(Button.EventType.CLICK, this.onPhonePanelCloseClick, this);
     this.phoneCallButton?.node.off(Button.EventType.CLICK, this.submitPhoneNumber, this);
     this.phoneHashBackspaceButton?.node.off(Button.EventType.CLICK, this.removeLastPhoneCharacter, this);
     for (const binding of this.keypadButtonBindings) {
@@ -569,6 +572,12 @@ export class TelephoneController extends Component {
     this.setManagedButtonsInteractable(false);
   }
 
+  /** Player-clicked X on phone panel; play UI click then close. */
+  private onPhonePanelCloseClick(): void {
+    AudioManager.getInstance()?.playCachedSettingsClick();
+    this.closePhonePanel();
+  }
+
   private closePhonePanel(): void {
     if (!this.phonePanelRuntime) {
       return;
@@ -699,11 +708,19 @@ export class TelephoneController extends Component {
   }
 
   private restoreAllPhoneKeyVisualStates(): void {
+    if (!this.phoneKeyVisualStates) {
+      return;
+    }
     for (const state of this.phoneKeyVisualStates.values()) {
+      if (!state?.node?.isValid) {
+        continue;
+      }
       Tween.stopAllByTarget(state.node);
       state.node.setPosition(state.basePosition);
       state.node.setScale(state.baseScale);
-      state.sprite.spriteFrame = state.normalSprite;
+      if (state.sprite?.isValid) {
+        state.sprite.spriteFrame = state.normalSprite;
+      }
       state.releaseRequested = false;
       state.pressCompleted = false;
     }
@@ -716,11 +733,13 @@ export class TelephoneController extends Component {
     if (this.phoneNumber.length >= this.activePhoneNumberLength) {
       return;
     }
+    AudioManager.getInstance()?.playCachedPhoneDial();
     this.phoneNumber += character;
     this.refreshPhoneNumberDisplay();
   }
 
   private removeLastPhoneCharacter(): void {
+    // Backspace is not a digit key; no dial SFX.
     if (this.emergencyMode && this.emergencyStatusVisible) {
       this.resetDialInput();
       return;

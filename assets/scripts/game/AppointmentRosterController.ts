@@ -24,6 +24,7 @@ import {
   hideInteractivePanelImmediate,
   showInteractivePanel,
 } from './InteractivePanelTransition';
+import { AudioManager } from '../audio/AudioManager';
 
 const { ccclass } = _decorator;
 
@@ -171,7 +172,7 @@ export class AppointmentRosterController extends Component {
 
   onEnable(): void {
     this.appointmentRosterHitButton?.node.on(Button.EventType.CLICK, this.openAppointmentRoster, this);
-    this.appointmentRosterCloseButtonComp?.node.on(Button.EventType.CLICK, this.closeAppointmentRoster, this);
+    this.appointmentRosterCloseButtonComp?.node.on(Button.EventType.CLICK, this.onAppointmentRosterCloseClick, this);
   }
 
   onDisable(): void {
@@ -204,10 +205,17 @@ export class AppointmentRosterController extends Component {
     showInteractivePanel(this.appointmentRosterPanelRuntime, {
       setInteractable: (interactable) => this.setRosterPanelInteractable(interactable),
     });
+    AudioManager.getInstance()?.playCachedDocumentFlip();
     this.rosterPanelOpen = true;
     this.setManagedButtonsInteractable(false);
     this.refreshEntryInteractable();
     this.refreshRosterView();
+  }
+
+  /** Player-clicked X on appointment roster; play UI click then close. */
+  private onAppointmentRosterCloseClick(): void {
+    AudioManager.getInstance()?.playCachedSettingsClick();
+    this.closeAppointmentRoster();
   }
 
   private closeAppointmentRoster(): void {
