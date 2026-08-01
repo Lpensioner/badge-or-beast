@@ -13,6 +13,11 @@ import {
   UITransform,
   Vec3,
 } from 'cc';
+import {
+  hideInteractivePanel,
+  hideInteractivePanelImmediate,
+  showInteractivePanel,
+} from './InteractivePanelTransition';
 
 const { ccclass } = _decorator;
 
@@ -24,6 +29,10 @@ const MOVE_RATIO = 0.7;
 const SAM_PORTRAIT_SPRITEFRAME_UUID = '77bf3f53-9419-49d9-9e02-5e6842ea43f9@f9941';
 const MARK_PORTRAIT_SPRITEFRAME_UUID = 'fb1193ad-141b-4e72-ab0c-37806ded9939@f9941';
 const JAKE_PORTRAIT_SPRITEFRAME_UUID = 'b4b7f2e2-ea45-495a-b888-70dba58ac1ae@f9941';
+const ALICE_PORTRAIT_SPRITEFRAME_UUID = '38f109ef-60af-4c94-8c34-6cfb9c3d0af3@f9941';
+const CLARA_PORTRAIT_SPRITEFRAME_UUID = 'd296e6b0-12d1-4d2a-8b07-b7cb637d0b69@f9941';
+const GRACE_PORTRAIT_SPRITEFRAME_UUID = 'cfd87454-5786-43b6-b729-a87bbf647aaf@f9941';
+const MAYA_PORTRAIT_SPRITEFRAME_UUID = 'cfb9609c-abeb-4034-9a6f-a654fe4a39c1@f9941';
 
 interface CachedButtonState {
   button: Button;
@@ -38,7 +47,60 @@ interface RegisteredButtonHandler {
 
 type InspectionSubjectId = 'carter' | 'ethan';
 
-type EmployeeFileId = 'carter' | 'ethan' | 'sam' | 'mark' | 'jake';
+export type EmployeeFileId =
+  | 'carter'
+  | 'ethan'
+  | 'sam'
+  | 'mark'
+  | 'jake'
+  | 'alice'
+  | 'clara'
+  | 'grace'
+  | 'maya';
+
+export interface EmployeeFileVisibleRules {
+  readonly appearanceFeatures: readonly string[];
+  readonly behavioralHabits: readonly string[];
+}
+
+export const EMPLOYEE_FILE_VISIBLE_RULES: Readonly<Record<EmployeeFileId, EmployeeFileVisibleRules>> = {
+  carter: {
+    appearanceFeatures: ['Orange hair', 'Orange-yellow eyeshadow', 'A mole above the collarbone'],
+    behavioralHabits: [],
+  },
+  ethan: {
+    appearanceFeatures: ['Large, prominent eyes'],
+    behavioralHabits: [],
+  },
+  sam: {
+    appearanceFeatures: ['Pale, warm-toned skin'],
+    behavioralHabits: ['Carefully maintains his hairstyle'],
+  },
+  mark: {
+    appearanceFeatures: ['Thick, prominent eyebrows', 'No facial moles'],
+    behavioralHabits: [],
+  },
+  jake: {
+    appearanceFeatures: ['Gray-blue irises'],
+    behavioralHabits: ['Carefully maintains and protects his eyebrows'],
+  },
+  alice: {
+    appearanceFeatures: ['Gray-blue irises'],
+    behavioralHabits: ['Usually wears earrings'],
+  },
+  clara: {
+    appearanceFeatures: ['Golden blonde hair'],
+    behavioralHabits: ['Wears vivid red lipstick'],
+  },
+  grace: {
+    appearanceFeatures: ['Golden blonde hair'],
+    behavioralHabits: ['Does not wear necklaces'],
+  },
+  maya: {
+    appearanceFeatures: ['A small mole near the tip of her nose'],
+    behavioralHabits: ['Does not wear silver accessories'],
+  },
+};
 
 interface EmployeeFileDefinition {
   readonly id: EmployeeFileId;
@@ -146,9 +208,17 @@ export class EmployeeFilesController extends Component {
   private samPortraitFrame: SpriteFrame | null = null;
   private markPortraitFrame: SpriteFrame | null = null;
   private jakePortraitFrame: SpriteFrame | null = null;
+  private alicePortraitFrame: SpriteFrame | null = null;
+  private claraPortraitFrame: SpriteFrame | null = null;
+  private gracePortraitFrame: SpriteFrame | null = null;
+  private mayaPortraitFrame: SpriteFrame | null = null;
   private samPortraitLoading = false;
   private markPortraitLoading = false;
   private jakePortraitLoading = false;
+  private alicePortraitLoading = false;
+  private claraPortraitLoading = false;
+  private gracePortraitLoading = false;
+  private mayaPortraitLoading = false;
   private activeEmployeeFileDrawerIndex = -1;
   private activeEmployeeFileTabIndex = 0;
 
@@ -186,6 +256,11 @@ export class EmployeeFilesController extends Component {
 
   onDestroy(): void {
     this.isDestroying = true;
+    if (this.detailPanel && isValid(this.detailPanel, true)) {
+      hideInteractivePanelImmediate(this.detailPanel, {
+        setInteractable: (interactable) => this.setDetailPanelInteractable(interactable),
+      });
+    }
     this.unregisterEvents();
     this.stopAllTweensSafely();
     this.drawerClickHandlers.length = 0;
@@ -205,9 +280,17 @@ export class EmployeeFilesController extends Component {
     this.samPortraitFrame = null;
     this.markPortraitFrame = null;
     this.jakePortraitFrame = null;
+    this.alicePortraitFrame = null;
+    this.claraPortraitFrame = null;
+    this.gracePortraitFrame = null;
+    this.mayaPortraitFrame = null;
     this.samPortraitLoading = false;
     this.markPortraitLoading = false;
     this.jakePortraitLoading = false;
+    this.alicePortraitLoading = false;
+    this.claraPortraitLoading = false;
+    this.gracePortraitLoading = false;
+    this.mayaPortraitLoading = false;
   }
 
   public setActiveInspectionSubject(_subjectId: InspectionSubjectId): void {}
@@ -377,6 +460,7 @@ export class EmployeeFilesController extends Component {
       'EmployeeFileDetailTab01Hit',
       'EmployeeFileDetailTab02Hit',
       'EmployeeFileDetailTab03Hit',
+      'EmployeeFileDetailTab04Hit',
     ];
     for (const name of detailTabNames) {
       const node = this.detailPanel.getChildByName(name);
@@ -509,7 +593,7 @@ export class EmployeeFilesController extends Component {
     this.activeEmployeeFileDrawerIndex = -1;
     this.activeEmployeeFileTabIndex = 0;
     this.forceCloseDetailVisibility();
-    this.setDetailTabInteractable(false, false, false);
+    this.setDetailTabInteractable([false, false, false, false]);
 
     for (let index = 0; index < this.drawerVisuals.length; index += 1) {
       this.openVisuals[index].active = false;
@@ -524,8 +608,33 @@ export class EmployeeFilesController extends Component {
     this.setFileDetailContentVisible(false);
 
     if (this.detailPanel && isValid(this.detailPanel, true)) {
-      this.detailPanel.active = false;
+      hideInteractivePanelImmediate(this.detailPanel, {
+        setInteractable: (interactable) => this.setDetailPanelInteractable(interactable),
+      });
     }
+  }
+
+  private setDetailPanelInteractable(interactable: boolean): void {
+    if (this.detailCloseButton && isValid(this.detailCloseButton, true)) {
+      this.detailCloseButton.interactable = interactable;
+    }
+    if (!interactable) {
+      this.setDetailTabInteractable([false, false, false, false]);
+      return;
+    }
+    if (this.activeEmployeeFileDrawerIndex === 0) {
+      this.setDetailTabInteractable([true, true, true, false]);
+      return;
+    }
+    if (this.activeEmployeeFileDrawerIndex === 1) {
+      this.setDetailTabInteractable([true, true, false, false]);
+      return;
+    }
+    if (this.activeEmployeeFileDrawerIndex === 2) {
+      this.setDetailTabInteractable([true, true, true, true]);
+      return;
+    }
+    this.setDetailTabInteractable([false, false, false, false]);
   }
 
   private setFileDetailContentVisible(visible: boolean): void {
@@ -812,18 +921,24 @@ export class EmployeeFilesController extends Component {
     this.activeEmployeeFileDrawerIndex = index;
     this.activeEmployeeFileTabIndex = 0;
     if (index === 0) {
-      this.setDetailTabInteractable(true, true, true);
+      this.setDetailTabInteractable([true, true, true, false]);
     } else if (index === 1) {
-      this.setDetailTabInteractable(true, true, false);
+      this.setDetailTabInteractable([true, true, false, false]);
+    } else if (index === 2) {
+      this.setDetailTabInteractable([true, true, true, true]);
     } else {
-      this.setDetailTabInteractable(false, false, false);
+      this.setDetailTabInteractable([false, false, false, false]);
     }
 
-    this.detailPanel.active = true;
+    showInteractivePanel(this.detailPanel, {
+      setInteractable: (interactable) => this.setDetailPanelInteractable(interactable),
+    });
     this.setFileDetailContentVisible(true);
     if (!this.applyEmployeeFileEntry(this.activeEmployeeFileDrawerIndex, this.activeEmployeeFileTabIndex)) {
       this.setFileDetailContentVisible(false);
-      this.detailPanel.active = false;
+      hideInteractivePanelImmediate(this.detailPanel, {
+        setInteractable: (interactable) => this.setDetailPanelInteractable(interactable),
+      });
       this.setDrawerButtonsInteractable(true);
       if (this.currentOpenIndex >= 0 && this.isNodeAlive(this.fileHits[this.currentOpenIndex])) {
         this.fileHits[this.currentOpenIndex].active = true;
@@ -846,6 +961,22 @@ export class EmployeeFilesController extends Component {
       this.resolvePortraitSourcesIfNeeded();
       return false;
     }
+    if (drawerIndex === 2 && tabIndex === 0 && !this.alicePortraitFrame) {
+      this.resolvePortraitSourcesIfNeeded();
+      return false;
+    }
+    if (drawerIndex === 2 && tabIndex === 1 && !this.claraPortraitFrame) {
+      this.resolvePortraitSourcesIfNeeded();
+      return false;
+    }
+    if (drawerIndex === 2 && tabIndex === 2 && !this.gracePortraitFrame) {
+      this.resolvePortraitSourcesIfNeeded();
+      return false;
+    }
+    if (drawerIndex === 2 && tabIndex === 3 && !this.mayaPortraitFrame) {
+      this.resolvePortraitSourcesIfNeeded();
+      return false;
+    }
     const definition = this.getEmployeeFileDefinition(drawerIndex, tabIndex);
     if (definition) {
       return this.applyEmployeeFileDefinition(definition);
@@ -857,6 +988,7 @@ export class EmployeeFilesController extends Component {
   private getEmployeeFileDefinition(drawerIndex: number, tabIndex: number): EmployeeFileDefinition | null {
     this.resolvePortraitSourcesIfNeeded();
     if (drawerIndex === 0 && tabIndex === 0 && this.carterPortraitFrame) {
+      const visibleRules = EMPLOYEE_FILE_VISIBLE_RULES.carter;
       return {
         id: 'carter',
         department: 'Research Department',
@@ -865,15 +997,12 @@ export class EmployeeFilesController extends Component {
         employeeId: '017320',
         position: 'Researcher',
         portraitFrame: this.carterPortraitFrame,
-        appearanceFeatures: [
-          'Orange hair',
-          'Orange-yellow eyeshadow',
-          'A mole above the collarbone',
-        ],
-        behavioralHabits: [],
+        appearanceFeatures: visibleRules.appearanceFeatures,
+        behavioralHabits: visibleRules.behavioralHabits,
       };
     }
     if (drawerIndex === 0 && tabIndex === 1 && this.ethanPortraitFrame) {
+      const visibleRules = EMPLOYEE_FILE_VISIBLE_RULES.ethan;
       return {
         id: 'ethan',
         department: 'Research Department',
@@ -882,11 +1011,12 @@ export class EmployeeFilesController extends Component {
         employeeId: '867530',
         position: 'Research Assistant',
         portraitFrame: this.ethanPortraitFrame,
-        appearanceFeatures: ['Large, prominent eyes'],
-        behavioralHabits: ['Frequently adjusts and plays with his hairstyle'],
+        appearanceFeatures: visibleRules.appearanceFeatures,
+        behavioralHabits: visibleRules.behavioralHabits,
       };
     }
     if (drawerIndex === 0 && tabIndex === 2 && this.samPortraitFrame) {
+      const visibleRules = EMPLOYEE_FILE_VISIBLE_RULES.sam;
       return {
         id: 'sam',
         department: 'Research Department',
@@ -895,11 +1025,12 @@ export class EmployeeFilesController extends Component {
         employeeId: '481206',
         position: 'Research Team Lead',
         portraitFrame: this.samPortraitFrame,
-        appearanceFeatures: ['Pale, warm-toned skin', 'Carefully maintains his hairstyle'],
-        behavioralHabits: ['Gentle and even-tempered', 'Always willing to help coworkers'],
+        appearanceFeatures: visibleRules.appearanceFeatures,
+        behavioralHabits: visibleRules.behavioralHabits,
       };
     }
     if (drawerIndex === 1 && tabIndex === 0 && this.markPortraitFrame) {
+      const visibleRules = EMPLOYEE_FILE_VISIBLE_RULES.mark;
       return {
         id: 'mark',
         department: 'Production Department',
@@ -908,11 +1039,12 @@ export class EmployeeFilesController extends Component {
         employeeId: '624817',
         position: 'Production Manager',
         portraitFrame: this.markPortraitFrame,
-        appearanceFeatures: ['Thick, prominent eyebrows', 'No facial moles'],
-        behavioralHabits: [],
+        appearanceFeatures: visibleRules.appearanceFeatures,
+        behavioralHabits: visibleRules.behavioralHabits,
       };
     }
     if (drawerIndex === 1 && tabIndex === 1 && this.jakePortraitFrame) {
+      const visibleRules = EMPLOYEE_FILE_VISIBLE_RULES.jake;
       return {
         id: 'jake',
         department: 'Production Department',
@@ -921,11 +1053,64 @@ export class EmployeeFilesController extends Component {
         employeeId: '624935',
         position: 'Production Technician',
         portraitFrame: this.jakePortraitFrame,
-        appearanceFeatures: ['Gray-blue irises'],
-        behavioralHabits: [
-          'Carefully maintains and protects his eyebrows',
-          'Reserved and aloof',
-        ],
+        appearanceFeatures: visibleRules.appearanceFeatures,
+        behavioralHabits: visibleRules.behavioralHabits,
+      };
+    }
+    if (drawerIndex === 2 && tabIndex === 0 && this.alicePortraitFrame) {
+      const visibleRules = EMPLOYEE_FILE_VISIBLE_RULES.alice;
+      return {
+        id: 'alice',
+        department: 'Sales Department',
+        departmentPhone: '7716',
+        displayName: 'Alice',
+        employeeId: '731204',
+        position: 'Sales Associate',
+        portraitFrame: this.alicePortraitFrame,
+        appearanceFeatures: visibleRules.appearanceFeatures,
+        behavioralHabits: visibleRules.behavioralHabits,
+      };
+    }
+    if (drawerIndex === 2 && tabIndex === 1 && this.claraPortraitFrame) {
+      const visibleRules = EMPLOYEE_FILE_VISIBLE_RULES.clara;
+      return {
+        id: 'clara',
+        department: 'Sales Department',
+        departmentPhone: '7716',
+        displayName: 'Clara',
+        employeeId: '731318',
+        position: 'Sales Supervisor',
+        portraitFrame: this.claraPortraitFrame,
+        appearanceFeatures: visibleRules.appearanceFeatures,
+        behavioralHabits: visibleRules.behavioralHabits,
+      };
+    }
+    if (drawerIndex === 2 && tabIndex === 2 && this.gracePortraitFrame) {
+      const visibleRules = EMPLOYEE_FILE_VISIBLE_RULES.grace;
+      return {
+        id: 'grace',
+        department: 'Sales Department',
+        departmentPhone: '7716',
+        displayName: 'Grace',
+        employeeId: '731426',
+        position: 'Sales Associate',
+        portraitFrame: this.gracePortraitFrame,
+        appearanceFeatures: visibleRules.appearanceFeatures,
+        behavioralHabits: visibleRules.behavioralHabits,
+      };
+    }
+    if (drawerIndex === 2 && tabIndex === 3 && this.mayaPortraitFrame) {
+      const visibleRules = EMPLOYEE_FILE_VISIBLE_RULES.maya;
+      return {
+        id: 'maya',
+        department: 'Sales Department',
+        departmentPhone: '7716',
+        displayName: 'Maya',
+        employeeId: '731587',
+        position: 'Sales Intern',
+        portraitFrame: this.mayaPortraitFrame,
+        appearanceFeatures: visibleRules.appearanceFeatures,
+        behavioralHabits: visibleRules.behavioralHabits,
       };
     }
     return null;
@@ -941,7 +1126,7 @@ export class EmployeeFilesController extends Component {
       position: 'Position: —',
       appearance: '—',
       habits: '—',
-      portraitFrame: drawerIndex === 2 ? this.ethanPortraitFrame : null,
+      portraitFrame: null,
     };
   }
 
@@ -1037,6 +1222,10 @@ export class EmployeeFilesController extends Component {
     this.loadSamPortraitIfNeeded();
     this.loadMarkPortraitIfNeeded();
     this.loadJakePortraitIfNeeded();
+    this.loadAlicePortraitIfNeeded();
+    this.loadClaraPortraitIfNeeded();
+    this.loadGracePortraitIfNeeded();
+    this.loadMayaPortraitIfNeeded();
   }
 
   private loadSamPortraitIfNeeded(): void {
@@ -1117,6 +1306,110 @@ export class EmployeeFilesController extends Component {
     });
   }
 
+  private loadAlicePortraitIfNeeded(): void {
+    if (this.alicePortraitFrame || this.alicePortraitLoading) {
+      return;
+    }
+    this.alicePortraitLoading = true;
+    assetManager.loadAny(ALICE_PORTRAIT_SPRITEFRAME_UUID, (error, asset) => {
+      this.alicePortraitLoading = false;
+      if (error) {
+        console.warn('[EmployeeFilesController] Failed to load Alice portrait sprite frame.', error);
+        return;
+      }
+      const frame = asset as SpriteFrame | null;
+      if (!frame) {
+        return;
+      }
+      this.alicePortraitFrame = frame;
+      if (
+        this.isDetailOpen &&
+        this.activeEmployeeFileDrawerIndex === 2 &&
+        this.activeEmployeeFileTabIndex === 0
+      ) {
+        this.applyEmployeeFileEntry(this.activeEmployeeFileDrawerIndex, this.activeEmployeeFileTabIndex);
+      }
+    });
+  }
+
+  private loadClaraPortraitIfNeeded(): void {
+    if (this.claraPortraitFrame || this.claraPortraitLoading) {
+      return;
+    }
+    this.claraPortraitLoading = true;
+    assetManager.loadAny(CLARA_PORTRAIT_SPRITEFRAME_UUID, (error, asset) => {
+      this.claraPortraitLoading = false;
+      if (error) {
+        console.warn('[EmployeeFilesController] Failed to load Clara portrait sprite frame.', error);
+        return;
+      }
+      const frame = asset as SpriteFrame | null;
+      if (!frame) {
+        return;
+      }
+      this.claraPortraitFrame = frame;
+      if (
+        this.isDetailOpen &&
+        this.activeEmployeeFileDrawerIndex === 2 &&
+        this.activeEmployeeFileTabIndex === 1
+      ) {
+        this.applyEmployeeFileEntry(this.activeEmployeeFileDrawerIndex, this.activeEmployeeFileTabIndex);
+      }
+    });
+  }
+
+  private loadGracePortraitIfNeeded(): void {
+    if (this.gracePortraitFrame || this.gracePortraitLoading) {
+      return;
+    }
+    this.gracePortraitLoading = true;
+    assetManager.loadAny(GRACE_PORTRAIT_SPRITEFRAME_UUID, (error, asset) => {
+      this.gracePortraitLoading = false;
+      if (error) {
+        console.warn('[EmployeeFilesController] Failed to load Grace portrait sprite frame.', error);
+        return;
+      }
+      const frame = asset as SpriteFrame | null;
+      if (!frame) {
+        return;
+      }
+      this.gracePortraitFrame = frame;
+      if (
+        this.isDetailOpen &&
+        this.activeEmployeeFileDrawerIndex === 2 &&
+        this.activeEmployeeFileTabIndex === 2
+      ) {
+        this.applyEmployeeFileEntry(this.activeEmployeeFileDrawerIndex, this.activeEmployeeFileTabIndex);
+      }
+    });
+  }
+
+  private loadMayaPortraitIfNeeded(): void {
+    if (this.mayaPortraitFrame || this.mayaPortraitLoading) {
+      return;
+    }
+    this.mayaPortraitLoading = true;
+    assetManager.loadAny(MAYA_PORTRAIT_SPRITEFRAME_UUID, (error, asset) => {
+      this.mayaPortraitLoading = false;
+      if (error) {
+        console.warn('[EmployeeFilesController] Failed to load Maya portrait sprite frame.', error);
+        return;
+      }
+      const frame = asset as SpriteFrame | null;
+      if (!frame) {
+        return;
+      }
+      this.mayaPortraitFrame = frame;
+      if (
+        this.isDetailOpen &&
+        this.activeEmployeeFileDrawerIndex === 2 &&
+        this.activeEmployeeFileTabIndex === 3
+      ) {
+        this.applyEmployeeFileEntry(this.activeEmployeeFileDrawerIndex, this.activeEmployeeFileTabIndex);
+      }
+    });
+  }
+
   private formatFeatureList(items: readonly string[]): string {
     if (items.length === 0) {
       return '';
@@ -1169,17 +1462,27 @@ export class EmployeeFilesController extends Component {
       return;
     }
 
-    this.setFileDetailContentVisible(false);
-    this.detailPanel.active = false;
-    this.isDetailOpen = false;
-    this.activeEmployeeFileDrawerIndex = -1;
-    this.activeEmployeeFileTabIndex = 0;
-    this.setDetailTabInteractable(false, false, false);
-    this.setDrawerButtonsInteractable(true);
+    hideInteractivePanel(
+      this.detailPanel,
+      () => {
+        if (!this.isControllerAlive()) {
+          return;
+        }
+        this.setFileDetailContentVisible(false);
+        this.isDetailOpen = false;
+        this.activeEmployeeFileDrawerIndex = -1;
+        this.activeEmployeeFileTabIndex = 0;
+        this.setDetailTabInteractable([false, false, false, false]);
+        this.setDrawerButtonsInteractable(true);
 
-    if (this.currentOpenIndex >= 0 && this.isNodeAlive(this.fileHits[this.currentOpenIndex])) {
-      this.fileHits[this.currentOpenIndex].active = true;
-    }
+        if (this.currentOpenIndex >= 0 && this.isNodeAlive(this.fileHits[this.currentOpenIndex])) {
+          this.fileHits[this.currentOpenIndex].active = true;
+        }
+      },
+      {
+        setInteractable: (interactable) => this.setDetailPanelInteractable(interactable),
+      },
+    );
   }
 
   private setBaseButtonsInteractable(enabled: boolean): void {
@@ -1211,8 +1514,7 @@ export class EmployeeFilesController extends Component {
     }
   }
 
-  private setDetailTabInteractable(tab01: boolean, tab02: boolean, tab03: boolean): void {
-    const states = [tab01, tab02, tab03];
+  private setDetailTabInteractable(states: readonly boolean[]): void {
     for (let index = 0; index < this.detailTabButtons.length; index += 1) {
       const button = this.detailTabButtons[index];
       if (isValid(button, true) && isValid(button.node, true)) {
@@ -1241,7 +1543,7 @@ export class EmployeeFilesController extends Component {
   }
 
   private hasDrawerFileDetail(drawerIndex: number): boolean {
-    return drawerIndex === 0 || drawerIndex === 1;
+    return drawerIndex === 0 || drawerIndex === 1 || drawerIndex === 2;
   }
 
   private getMaxTabIndexForDrawer(drawerIndex: number): number {
@@ -1250,6 +1552,9 @@ export class EmployeeFilesController extends Component {
     }
     if (drawerIndex === 1) {
       return 1;
+    }
+    if (drawerIndex === 2) {
+      return 3;
     }
     return -1;
   }

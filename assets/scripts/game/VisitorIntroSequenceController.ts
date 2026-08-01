@@ -4,18 +4,29 @@ import {
   Color,
   Component,
   Graphics,
+  HorizontalTextAlignment,
   isValid,
   Label,
+  LabelOutline,
+  LabelShadow,
   Node,
   Quat,
+  resources,
+  Size,
   Sprite,
   SpriteFrame,
   Tween,
   tween,
   UITransform,
+  UIOpacity,
+  Vec2,
   Vec3,
+  VerticalTextAlignment,
 } from 'cc';
 import { ShutterToggleController } from './ShutterToggleController';
+import { EMPLOYEE_PROFILES } from './inspection/EmployeeProfileCatalog';
+import type { EmployeeKey, WindowPortraitPresentation } from './inspection/InspectionTypes';
+import type { VisitorClaimDialogue } from './visitors/VisitorClaimDialogueResolver';
 
 const { ccclass } = _decorator;
 
@@ -31,6 +42,8 @@ interface TransformStateCache {
   scale: Vec3;
   rotation: Quat;
   active: boolean;
+  opacity: number | null;
+  siblingIndex: number;
 }
 
 interface VisitorDialogueOptions {
@@ -39,8 +52,108 @@ interface VisitorDialogueOptions {
   readonly minimumVisibleSeconds?: number;
 }
 
+export interface VisitorIntroRunContext {
+  readonly roundId: string | null;
+  readonly employeeKey: string | null;
+  readonly caseKind: string | null;
+}
+
+export type VisitorIntroResult =
+  | {
+      ok: true;
+    }
+  | {
+      ok: false;
+      reason: string;
+    };
+
+export interface VisitorClaimSequenceRunContext {
+  readonly roundId: string;
+  readonly dialogue: VisitorClaimDialogue;
+}
+
+export type VisitorClaimSequenceFailureReason =
+  | 'duplicate_sequence_in_progress'
+  | 'duplicate_sequence_completed'
+  | 'employee_intro_in_progress'
+  | 'superseded_by_new_request'
+  | 'cancelled'
+  | 'destroyed'
+  | 'stale_sequence'
+  | 'dialogue_unavailable'
+  | 'invalid_context';
+
+export type VisitorClaimSequenceRunResult =
+  | {
+      readonly ok: true;
+      readonly roundId: string;
+    }
+  | {
+      readonly ok: false;
+      readonly roundId: string | null;
+      readonly reason: VisitorClaimSequenceFailureReason;
+    };
+
+export interface ShiftDisplayState {
+  readonly nightIndex: number;
+  readonly dateText: string;
+  readonly timeText: string;
+  readonly periodText: string;
+}
+
+export interface CampaignShiftDisplayState {
+  readonly dayIndex: number;
+  readonly date: string;
+  readonly displayTime: string;
+  readonly period: 'AM' | 'PM';
+}
+
+export interface CampaignShiftCompletionDisplayState {
+  readonly dayIndex: number;
+  readonly date: string;
+  readonly displayTime: string;
+  readonly period: 'AM' | 'PM';
+}
+
+export interface CampaignDocumentDeliveryAvailability {
+  readonly employeeCardEnabled: boolean;
+  readonly applicationFormEnabled: boolean;
+}
+
 @ccclass('VisitorIntroSequenceController')
 export class VisitorIntroSequenceController extends Component {
+  private static readonly DOCUMENT_INTRO_SCALE_FACTOR = 0.24;
+  private static readonly VISITOR_CLAIM_MINIMUM_VISIBLE_SECONDS = 0.25;
+  private static readonly SHIFT_CLOCK_PANEL_SPRITEFRAME_PATH =
+    'ui/game/control_room/ui_shift_clock_panel_bg/spriteFrame';
+  private static readonly PURGE_PANEL_SPRITEFRAME_PATH =
+    'ui/game/control_room/ui_purge_procedure_1214/spriteFrame';
+  private static readonly SHIFT_CLOCK_PANEL_POSITION = new Vec3(-4, 484.9, 0);
+  private static readonly SHIFT_CLOCK_PANEL_SIZE = new Size(400.4, 207.4);
+  private static readonly PURGE_PANEL_SOURCE_WIDTH = 777;
+  private static readonly PURGE_PANEL_SOURCE_HEIGHT = 1233;
+  private static readonly PURGE_PANEL_SAFE_PADDING = 2;
+  private static readonly PURGE_PANEL_SLOT_BOUNDS = Object.freeze({
+    left: 200,
+    right: 354,
+    top: 121,
+    bottom: -121,
+  });
+  private static readonly SHIFT_CLOCK_TEXT_COLOR = new Color(255, 38, 28, 255);
+  private static readonly SHIFT_CLOCK_TEXT_OUTLINE_COLOR = new Color(120, 12, 8, 220);
+  private static readonly SHIFT_CLOCK_TEXT_SHADOW_COLOR = new Color(255, 20, 14, 180);
+  private static readonly SHIFT_CLOCK_DEFAULT_DISPLAY: ShiftDisplayState = Object.freeze({
+    nightIndex: 1,
+    dateText: '1999-12-03 FRI',
+    timeText: '01:00',
+    periodText: 'AM',
+  });
+  private static readonly SHIFT_CLOCK_SMOKE_TEST_DISPLAY: ShiftDisplayState = Object.freeze({
+    nightIndex: 2,
+    dateText: '1999-12-04 SAT',
+    timeText: '02:30',
+    periodText: 'AM',
+  });
   private ready = false;
   private hasPlayedIntro = false;
   private introFinished = false;
@@ -98,7 +211,42 @@ export class VisitorIntroSequenceController extends Component {
   private allowCurrentDialogueTapDismiss = true;
   private currentDialogueMinimumVisibleElapsed = true;
   private preparedCharacterFrame: SpriteFrame | null = null;
-  private sequenceCompletion: (() => void) | null = null;
+  private pendingResultResolver: ((result: VisitorIntroResult) => void) | null = null;
+  private pendingAcceptedCallback: (() => void) | null = null;
+  private lastBlockReason: string | null = null;
+  private activeIntroRoundId: string | null = null;
+  private completedIntroRoundId: string | null = null;
+  private visitorClaimSequenceGeneration = 0;
+  private activeVisitorClaimSequenceRoundId: string | null = null;
+  private completedVisitorClaimSequenceRoundId: string | null = null;
+  private pendingVisitorClaimSequence:
+    | {
+        readonly generation: number;
+        readonly roundId: string;
+        readonly resolve: (result: VisitorClaimSequenceRunResult) => void;
+      }
+    | null = null;
+  private readonly introRequestCountByRound = new Map<string, number>();
+  private activeRunContext: VisitorIntroRunContext = {
+    roundId: null,
+    employeeKey: null,
+    caseKind: null,
+  };
+  private shiftClockPanelRuntime: Node | null = null;
+  private shiftClockPanelBgSprite: Sprite | null = null;
+  private purgeProcedurePanelVisual: Node | null = null;
+  private purgeProcedurePanelSprite: Sprite | null = null;
+  private shiftDayLabel: Label | null = null;
+  private shiftDateLabel: Label | null = null;
+  private shiftTimeLabel: Label | null = null;
+  private shiftPeriodLabel: Label | null = null;
+  private shiftClockSpriteLoadAttempted = false;
+  private purgePanelSpriteLoadAttempted = false;
+  private purgePanelSpriteLoadLogged = false;
+  private campaignDocumentDeliveryAvailability: CampaignDocumentDeliveryAvailability = {
+    employeeCardEnabled: true,
+    applicationFormEnabled: true,
+  };
 
   private readonly handleGreetingDismissClick = (): void => {
     if (!this.allowCurrentDialogueTapDismiss || !this.currentDialogueMinimumVisibleElapsed) {
@@ -142,24 +290,30 @@ export class VisitorIntroSequenceController extends Component {
     this.registerGreetingEvents();
     this.cacheFinalStates();
     this.cacheButtonStates();
+    this.hideDocumentsBeforeDelivery();
+    this.initializeShiftClockPanelRuntime();
+    this.setCampaignShiftDisplay({
+      dayIndex: 1,
+      date: '1999-12-03',
+      displayTime: '09:00',
+      period: 'AM',
+    });
   }
 
   start(): void {
-    if (!this.ready || this.hasPlayedIntro) {
+    if (!this.ready) {
       return;
     }
-    this.hasPlayedIntro = true;
-    const characterFrame = this.carterCharacter?.getComponent(Sprite)?.spriteFrame ?? null;
-    if (!characterFrame) {
-      this.playForInspectionSubject();
-      return;
-    }
-    this.prepareInspectionSubject(characterFrame);
-    this.playForInspectionSubject();
+    // Round intro must be owned by EvidencePreviewController after a valid round context exists.
+    this.hasPlayedIntro = false;
   }
 
   onDestroy(): void {
     this.isDestroying = true;
+    this.cancelVisitorClaimSequence('destroyed');
+    this.introPlaying = false;
+    this.activeIntroRoundId = null;
+    this.resolvePendingResult({ ok: false, reason: 'destroyed' });
     this.unschedule(this.handleGreetingAutoHide);
     this.unschedule(this.handleGreetingMinimumVisibleElapsed);
     this.unregisterGreetingEvents();
@@ -184,16 +338,129 @@ export class VisitorIntroSequenceController extends Component {
     return this.applyPreparedFrames();
   }
 
-  public playForInspectionSubject(onComplete?: () => void): boolean {
+  public playForInspectionSubject(
+    context?: VisitorIntroRunContext,
+    onAccepted?: () => void,
+  ): Promise<VisitorIntroResult> {
+    this.activeRunContext = context ?? {
+      roundId: null,
+      employeeKey: null,
+      caseKind: null,
+    };
+    this.logIntroStage('request received');
+
     if (!this.ready || this.isDestroying) {
-      return false;
+      return Promise.resolve(this.blockIntro('controller_not_ready_or_destroying'));
+    }
+    if (!this.hasValidRoundContext(this.activeRunContext)) {
+      return Promise.resolve(this.rejectInvalidRoundContext());
+    }
+    if (this.activeVisitorClaimSequenceRoundId !== null) {
+      return Promise.resolve(this.blockIntro('visitor_claim_sequence_in_progress'));
+    }
+    const roundId = this.activeRunContext.roundId;
+    this.incrementIntroRequestCount(roundId);
+    if (this.introPlaying && this.activeIntroRoundId === roundId) {
+      return Promise.resolve(this.blockIntro('duplicate_intro_in_progress'));
+    }
+    if (this.completedIntroRoundId === roundId) {
+      return Promise.resolve(this.blockIntro('duplicate_intro_completed'));
+    }
+    if (!this.cacheFinalStates()) {
+      return Promise.resolve(this.blockIntro('final_states_not_captured'));
     }
     if (!this.preparedCharacterFrame) {
+      return Promise.resolve(this.blockIntro('prepared_character_frame_missing'));
+    }
+
+    this.resolvePendingResult({ ok: false, reason: 'superseded_by_new_request' });
+    this.clearIntroRuntimeState();
+    this.lastBlockReason = null;
+    this.pendingAcceptedCallback = onAccepted ?? null;
+    this.activeIntroRoundId = roundId;
+
+    const started = this.playIntroSequence();
+    if (!started) {
+      this.activeIntroRoundId = null;
+      return Promise.resolve({
+        ok: false,
+        reason: this.lastBlockReason ?? 'intro_sequence_rejected_by_guard',
+      });
+    }
+    return new Promise((resolve) => {
+      this.pendingResultResolver = resolve;
+    });
+  }
+
+  public async playVisitorClaimSequence(
+    context: VisitorClaimSequenceRunContext,
+  ): Promise<VisitorClaimSequenceRunResult> {
+    const validatedRoundId = this.validateVisitorClaimSequenceContext(context);
+    if (!validatedRoundId) {
+      return { ok: false, roundId: null, reason: 'invalid_context' };
+    }
+
+    if (!this.ready || this.isDestroying) {
+      return { ok: false, roundId: validatedRoundId, reason: 'destroyed' };
+    }
+
+    if (this.isEmployeeIntroSequenceInProgress()) {
+      return { ok: false, roundId: validatedRoundId, reason: 'employee_intro_in_progress' };
+    }
+
+    if (this.activeVisitorClaimSequenceRoundId === validatedRoundId) {
+      return { ok: false, roundId: validatedRoundId, reason: 'duplicate_sequence_in_progress' };
+    }
+
+    if (this.completedVisitorClaimSequenceRoundId === validatedRoundId) {
+      return { ok: false, roundId: validatedRoundId, reason: 'duplicate_sequence_completed' };
+    }
+
+    if (
+      this.activeVisitorClaimSequenceRoundId !== null &&
+      this.activeVisitorClaimSequenceRoundId !== validatedRoundId
+    ) {
+      this.cancelActiveVisitorClaimSequence('superseded_by_new_request');
+    }
+
+    this.visitorClaimSequenceGeneration += 1;
+    const sequenceGeneration = this.visitorClaimSequenceGeneration;
+    this.activeVisitorClaimSequenceRoundId = validatedRoundId;
+
+    return await new Promise<VisitorClaimSequenceRunResult>((resolve) => {
+      this.pendingVisitorClaimSequence = {
+        generation: sequenceGeneration,
+        roundId: validatedRoundId,
+        resolve,
+      };
+      void this.runVisitorClaimSequence(context.dialogue, validatedRoundId, sequenceGeneration);
+    });
+  }
+
+  public cancelVisitorClaimSequence(
+    reason: 'cancelled' | 'superseded_by_new_request' | 'destroyed' = 'cancelled',
+  ): boolean {
+    return this.cancelActiveVisitorClaimSequence(reason);
+  }
+
+  private cancelActiveVisitorClaimSequence(
+    reason: 'cancelled' | 'superseded_by_new_request' | 'destroyed',
+  ): boolean {
+    const activeRoundId = this.activeVisitorClaimSequenceRoundId;
+    if (!activeRoundId) {
       return false;
     }
-    this.clearIntroRuntimeState();
-    this.sequenceCompletion = onComplete ?? null;
-    this.playIntroSequence();
+
+    this.visitorClaimSequenceGeneration += 1;
+    this.activeVisitorClaimSequenceRoundId = null;
+    this.forceCloseGreetingPanel();
+
+    const pending = this.pendingVisitorClaimSequence;
+    if (pending && pending.roundId === activeRoundId) {
+      this.pendingVisitorClaimSequence = null;
+      pending.resolve({ ok: false, roundId: activeRoundId, reason });
+    }
+
     return true;
   }
 
@@ -244,6 +511,85 @@ export class VisitorIntroSequenceController extends Component {
         this.scheduleOnce(this.handleGreetingAutoHide, autoCloseSeconds);
       }
     });
+  }
+
+  public setShiftDisplay(display: ShiftDisplayState): void {
+    const normalized = this.normalizeShiftDisplay(display);
+    if (this.shiftDayLabel && isValid(this.shiftDayLabel, true)) {
+      this.shiftDayLabel.string = `NIGHT ${normalized.nightIndex}`;
+    }
+    if (this.shiftDateLabel && isValid(this.shiftDateLabel, true)) {
+      this.shiftDateLabel.string = normalized.dateText;
+    }
+    if (this.shiftTimeLabel && isValid(this.shiftTimeLabel, true)) {
+      this.shiftTimeLabel.string = normalized.timeText;
+    }
+    if (this.shiftPeriodLabel && isValid(this.shiftPeriodLabel, true)) {
+      this.shiftPeriodLabel.string = normalized.periodText;
+    }
+  }
+
+  public setCampaignShiftDisplay(display: CampaignShiftDisplayState): void {
+    const dayIndex = Number.isFinite(display.dayIndex) ? Math.max(1, Math.floor(display.dayIndex)) : 1;
+    const dateText = display.date?.trim() || '1999-12-03';
+    const timeText = display.displayTime?.trim() || '09:00';
+    const periodText = display.period === 'PM' ? 'PM' : 'AM';
+    if (this.shiftDayLabel && isValid(this.shiftDayLabel, true)) {
+      this.shiftDayLabel.string = `DAY ${dayIndex}`;
+    }
+    if (this.shiftDateLabel && isValid(this.shiftDateLabel, true)) {
+      this.shiftDateLabel.string = dateText;
+    }
+    if (this.shiftTimeLabel && isValid(this.shiftTimeLabel, true)) {
+      this.shiftTimeLabel.string = timeText;
+    }
+    if (this.shiftPeriodLabel && isValid(this.shiftPeriodLabel, true)) {
+      this.shiftPeriodLabel.string = periodText;
+    }
+  }
+
+  public setCampaignShiftCompletionDisplay(display: CampaignShiftCompletionDisplayState): void {
+    const dayIndex = Number.isFinite(display.dayIndex) ? Math.max(1, Math.floor(display.dayIndex)) : 1;
+    const dateText = display.date?.trim() || '1999-12-03';
+    const timeText = display.displayTime?.trim() || '09:00';
+    const periodText = display.period === 'PM' ? 'PM' : 'AM';
+    if (this.shiftDayLabel && isValid(this.shiftDayLabel, true)) {
+      this.shiftDayLabel.string = `DAY ${dayIndex} COMPLETE`;
+    }
+    if (this.shiftDateLabel && isValid(this.shiftDateLabel, true)) {
+      this.shiftDateLabel.string = dateText;
+    }
+    if (this.shiftTimeLabel && isValid(this.shiftTimeLabel, true)) {
+      this.shiftTimeLabel.string = timeText;
+    }
+    if (this.shiftPeriodLabel && isValid(this.shiftPeriodLabel, true)) {
+      this.shiftPeriodLabel.string = periodText;
+    }
+  }
+
+  public setCampaignDocumentDeliveryAvailability(
+    availability: CampaignDocumentDeliveryAvailability,
+  ): void {
+    this.campaignDocumentDeliveryAvailability = {
+      employeeCardEnabled: availability.employeeCardEnabled,
+      applicationFormEnabled: availability.applicationFormEnabled,
+    };
+    if (!availability.employeeCardEnabled && this.employeeCardVisual && isValid(this.employeeCardVisual, true)) {
+      this.employeeCardVisual.active = false;
+    }
+    if (
+      !availability.applicationFormEnabled &&
+      this.applicationFormVisual &&
+      isValid(this.applicationFormVisual, true)
+    ) {
+      this.applicationFormVisual.active = false;
+    }
+    if (!availability.employeeCardEnabled || !availability.applicationFormEnabled) {
+      this.setDocumentHitInteractable(
+        availability.employeeCardEnabled && this.getCachedInteractable('EmployeeCardHit'),
+        availability.applicationFormEnabled && this.getCachedInteractable('ApplicationFormHit'),
+      );
+    }
   }
 
   private resolveNodes(): boolean {
@@ -310,15 +656,297 @@ export class VisitorIntroSequenceController extends Component {
     return true;
   }
 
-  private cacheFinalStates(): void {
-    this.finalStatesCaptured = false;
-    this.carterFinalState = this.captureTransformState(this.carterCharacter);
-    this.employeeCardFinalState = this.captureTransformState(this.employeeCardVisual);
-    this.applicationFormFinalState = this.captureTransformState(this.applicationFormVisual);
+  private initializeShiftClockPanelRuntime(): void {
+    this.shiftClockPanelRuntime =
+      this.node.getChildByName('ShiftClockPanelRuntime') ?? new Node('ShiftClockPanelRuntime');
+    if (!this.shiftClockPanelRuntime.parent) {
+      this.node.addChild(this.shiftClockPanelRuntime);
+    }
+    this.shiftClockPanelRuntime.setSiblingIndex(1);
+    this.shiftClockPanelRuntime.setPosition(VisitorIntroSequenceController.SHIFT_CLOCK_PANEL_POSITION);
+    this.shiftClockPanelRuntime.setScale(1, 1, 1);
+    const rootTransform =
+      this.shiftClockPanelRuntime.getComponent(UITransform) ??
+      this.shiftClockPanelRuntime.addComponent(UITransform);
+    rootTransform.setContentSize(VisitorIntroSequenceController.SHIFT_CLOCK_PANEL_SIZE);
+    rootTransform.setAnchorPoint(0.5, 0.5);
+
+    const panelBgNode = this.ensureShiftClockNode(
+      this.shiftClockPanelRuntime,
+      'ShiftClockPanelBg',
+      VisitorIntroSequenceController.SHIFT_CLOCK_PANEL_SIZE,
+      new Vec3(0, 0, 0),
+    );
+    panelBgNode.setPosition(6, -1, 0);
+    panelBgNode.setScale(1.035, 1.035, 1);
+    this.shiftClockPanelBgSprite = panelBgNode.getComponent(Sprite) ?? panelBgNode.addComponent(Sprite);
+    this.shiftClockPanelBgSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+    this.tryLoadShiftClockPanelSprite();
+    this.initializePurgeProcedurePanelVisual(panelBgNode);
+
+    this.shiftDayLabel = this.ensureShiftClockLabel({
+      parent: this.shiftClockPanelRuntime,
+      nodeName: 'ShiftDayLabel',
+      position: new Vec3(-110, 47, 0),
+      size: new Size(132, 26),
+      fontSize: 23,
+      align: HorizontalTextAlignment.LEFT,
+    });
+    this.shiftDateLabel = this.ensureShiftClockLabel({
+      parent: this.shiftClockPanelRuntime,
+      nodeName: 'ShiftDateLabel',
+      position: new Vec3(44, 47, 0),
+      size: new Size(194, 28),
+      fontSize: 23,
+      align: HorizontalTextAlignment.CENTER,
+    });
+    this.shiftTimeLabel = this.ensureShiftClockLabel({
+      parent: this.shiftClockPanelRuntime,
+      nodeName: 'ShiftTimeLabel',
+      position: new Vec3(-12, -8, 0),
+      size: new Size(192, 82),
+      fontSize: 62,
+      align: HorizontalTextAlignment.CENTER,
+    });
+    this.shiftPeriodLabel = this.ensureShiftClockLabel({
+      parent: this.shiftClockPanelRuntime,
+      nodeName: 'ShiftPeriodLabel',
+      position: new Vec3(102, -14, 0),
+      size: new Size(64, 36),
+      fontSize: 24,
+      align: HorizontalTextAlignment.LEFT,
+    });
+  }
+
+  private ensureShiftClockNode(parent: Node, name: string, size: Size, position: Vec3): Node {
+    const node = parent.getChildByName(name) ?? new Node(name);
+    if (!node.parent) {
+      parent.addChild(node);
+    }
+    node.setPosition(position);
+    node.setScale(1, 1, 1);
+    const transform = node.getComponent(UITransform) ?? node.addComponent(UITransform);
+    transform.setContentSize(size);
+    transform.setAnchorPoint(0.5, 0.5);
+    return node;
+  }
+
+  private ensureShiftClockLabel(config: {
+    readonly parent: Node;
+    readonly nodeName: string;
+    readonly position: Vec3;
+    readonly size: Size;
+    readonly fontSize: number;
+    readonly align: HorizontalTextAlignment;
+  }): Label {
+    const node = this.ensureShiftClockNode(config.parent, config.nodeName, config.size, config.position);
+    const label = node.getComponent(Label) ?? node.addComponent(Label);
+    label.useSystemFont = true;
+    label.fontFamily = 'Courier New';
+    label.color = VisitorIntroSequenceController.SHIFT_CLOCK_TEXT_COLOR;
+    label.horizontalAlign = config.align;
+    label.verticalAlign = VerticalTextAlignment.CENTER;
+    label.fontSize = config.fontSize;
+    label.lineHeight = Math.round(config.fontSize * 1.08);
+    const outline = node.getComponent(LabelOutline) ?? node.addComponent(LabelOutline);
+    outline.color = VisitorIntroSequenceController.SHIFT_CLOCK_TEXT_OUTLINE_COLOR;
+    outline.width = Math.max(1, Math.round(config.fontSize / 18));
+    const shadow = node.getComponent(LabelShadow) ?? node.addComponent(LabelShadow);
+    shadow.color = VisitorIntroSequenceController.SHIFT_CLOCK_TEXT_SHADOW_COLOR;
+    shadow.offset = new Vec2(0, 0);
+    shadow.blur = Math.max(4, Math.round(config.fontSize / 6));
+    return label;
+  }
+
+  private initializePurgeProcedurePanelVisual(panelBgNode: Node): void {
+    if (!this.shiftClockPanelRuntime || !isValid(this.shiftClockPanelRuntime, true)) {
+      return;
+    }
+    const slot = VisitorIntroSequenceController.PURGE_PANEL_SLOT_BOUNDS;
+    const safePadding = VisitorIntroSequenceController.PURGE_PANEL_SAFE_PADDING;
+    const targetWidth = Math.max(0, slot.right - slot.left - safePadding * 2);
+    const targetHeight = Math.max(0, slot.top - slot.bottom - safePadding * 2);
+    const containScale = Math.min(
+      targetWidth / VisitorIntroSequenceController.PURGE_PANEL_SOURCE_WIDTH,
+      targetHeight / VisitorIntroSequenceController.PURGE_PANEL_SOURCE_HEIGHT,
+    );
+    if (!Number.isFinite(containScale) || containScale <= 0) {
+      console.warn('[ShiftClockPanel] Purge panel contain scale is invalid.', {
+        targetWidth,
+        targetHeight,
+      });
+      return;
+    }
+    const displayWidth = VisitorIntroSequenceController.PURGE_PANEL_SOURCE_WIDTH * containScale;
+    const displayHeight = VisitorIntroSequenceController.PURGE_PANEL_SOURCE_HEIGHT * containScale;
+    const localX = (slot.left + slot.right) / 2;
+    const localY = (slot.top + slot.bottom) / 2;
+
+    const visualNode =
+      this.shiftClockPanelRuntime.getChildByName('PurgeProcedurePanelVisual') ??
+      new Node('PurgeProcedurePanelVisual');
+    if (!visualNode.parent) {
+      this.shiftClockPanelRuntime.addChild(visualNode);
+    }
+    visualNode.active = true;
+    visualNode.setPosition(localX, localY, 0);
+    visualNode.setScale(1, 1, 1);
+    visualNode.setRotationFromEuler(0, 0, 0);
+    const visualTransform = visualNode.getComponent(UITransform) ?? visualNode.addComponent(UITransform);
+    visualTransform.setAnchorPoint(0.5, 0.5);
+    visualTransform.setContentSize(displayWidth, displayHeight);
+    const visualSprite = visualNode.getComponent(Sprite) ?? visualNode.addComponent(Sprite);
+    visualSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+    visualSprite.type = Sprite.Type.SIMPLE;
+    visualSprite.color = Color.WHITE;
+    visualSprite.grayscale = false;
+
+    const panelBgSibling = panelBgNode.getSiblingIndex();
+    visualNode.setSiblingIndex(panelBgSibling + 1);
+    this.purgeProcedurePanelVisual = visualNode;
+    this.purgeProcedurePanelSprite = visualSprite;
+    this.tryLoadPurgePanelSprite();
+
+    console.info('[ShiftClockPanel] Purge panel overlay contain layout', {
+      slotBounds: {
+        left: slot.left,
+        right: slot.right,
+        top: slot.top,
+        bottom: slot.bottom,
+      },
+      safePadding,
+      targetWidth,
+      targetHeight,
+      containScale,
+      displayWidth,
+      displayHeight,
+      position: { x: localX, y: localY, z: 0 },
+      siblingIndex: visualNode.getSiblingIndex(),
+      distanceToShiftTimeLabelRightEdge: slot.left - (-12 + 192 / 2),
+      distanceToPanelRightEdge: 200.2 - (localX + displayWidth / 2),
+    });
+  }
+
+  private tryLoadShiftClockPanelSprite(): void {
+    if (this.shiftClockSpriteLoadAttempted) {
+      return;
+    }
+    this.shiftClockSpriteLoadAttempted = true;
+    resources.load(
+      VisitorIntroSequenceController.SHIFT_CLOCK_PANEL_SPRITEFRAME_PATH,
+      SpriteFrame,
+      (error, spriteFrame) => {
+        if (error) {
+          console.warn('[ShiftClockPanel] Failed to load panel sprite frame from resources.', error);
+          return;
+        }
+        if (
+          this.isDestroying ||
+          !this.shiftClockPanelBgSprite ||
+          !isValid(this.shiftClockPanelBgSprite, true) ||
+          !spriteFrame
+        ) {
+          return;
+        }
+        this.shiftClockPanelBgSprite.spriteFrame = spriteFrame;
+      },
+    );
+  }
+
+  private tryLoadPurgePanelSprite(): void {
+    if (
+      !this.purgeProcedurePanelSprite ||
+      !isValid(this.purgeProcedurePanelSprite, true) ||
+      !this.purgeProcedurePanelVisual ||
+      !isValid(this.purgeProcedurePanelVisual, true)
+    ) {
+      return;
+    }
+    const cachedSpriteFrame = resources.get(
+      VisitorIntroSequenceController.PURGE_PANEL_SPRITEFRAME_PATH,
+      SpriteFrame,
+    );
+    if (cachedSpriteFrame) {
+      if (this.purgeProcedurePanelSprite.spriteFrame !== cachedSpriteFrame) {
+        this.purgeProcedurePanelSprite.spriteFrame = cachedSpriteFrame;
+      }
+      if (!this.purgePanelSpriteLoadLogged) {
+        this.purgePanelSpriteLoadLogged = true;
+        console.info('[ShiftClockPanel] purge procedure panel loaded.');
+      }
+      this.purgePanelSpriteLoadAttempted = true;
+      return;
+    }
+    if (this.purgePanelSpriteLoadAttempted) {
+      return;
+    }
+    this.purgePanelSpriteLoadAttempted = true;
+    resources.load(
+      VisitorIntroSequenceController.PURGE_PANEL_SPRITEFRAME_PATH,
+      SpriteFrame,
+      (error, spriteFrame) => {
+        if (error) {
+          console.error('[ShiftClockPanel] failed to load purge procedure panel.', error);
+          return;
+        }
+        const visualNode = this.purgeProcedurePanelVisual;
+        const visualSprite = this.purgeProcedurePanelSprite;
+        if (
+          this.isDestroying ||
+          !isValid(this.node, true) ||
+          !visualNode ||
+          !isValid(visualNode, true) ||
+          !visualSprite ||
+          !isValid(visualSprite, true) ||
+          visualSprite.node !== visualNode ||
+          !spriteFrame
+        ) {
+          return;
+        }
+        visualSprite.spriteFrame = spriteFrame;
+        if (!this.purgePanelSpriteLoadLogged) {
+          this.purgePanelSpriteLoadLogged = true;
+          console.info('[ShiftClockPanel] purge procedure panel loaded.');
+        }
+      },
+    );
+  }
+
+  private normalizeShiftDisplay(display: ShiftDisplayState): ShiftDisplayState {
+    const fallback = VisitorIntroSequenceController.SHIFT_CLOCK_DEFAULT_DISPLAY;
+    const nightIndexRaw = Number.isFinite(display.nightIndex) ? Math.floor(display.nightIndex) : fallback.nightIndex;
+    const nightIndex = Math.max(1, nightIndexRaw);
+    return {
+      nightIndex,
+      dateText: display.dateText?.trim() || fallback.dateText,
+      timeText: display.timeText?.trim() || fallback.timeText,
+      periodText: display.periodText?.trim() || fallback.periodText,
+    };
+  }
+
+  private runShiftClockDisplaySmokeTest(): void {
+    this.setShiftDisplay(VisitorIntroSequenceController.SHIFT_CLOCK_DEFAULT_DISPLAY);
+    this.setShiftDisplay(VisitorIntroSequenceController.SHIFT_CLOCK_SMOKE_TEST_DISPLAY);
+    this.setShiftDisplay(VisitorIntroSequenceController.SHIFT_CLOCK_DEFAULT_DISPLAY);
+    console.info('[ShiftClockPanel] Smoke test applied and reset to default display.');
+  }
+
+  private cacheFinalStates(): boolean {
+    if (this.finalStatesCaptured) {
+      return true;
+    }
+    const carterState = this.captureTransformState(this.carterCharacter);
+    const employeeCardState = this.captureTransformState(this.employeeCardVisual);
+    const applicationState = this.captureTransformState(this.applicationFormVisual);
     this.finalStatesCaptured =
-      this.carterFinalState !== null &&
-      this.employeeCardFinalState !== null &&
-      this.applicationFormFinalState !== null;
+      carterState !== null && employeeCardState !== null && applicationState !== null;
+    if (!this.finalStatesCaptured) {
+      return false;
+    }
+    this.carterFinalState = carterState;
+    this.employeeCardFinalState = employeeCardState;
+    this.applicationFormFinalState = applicationState;
+    return true;
   }
 
   private cacheButtonStates(): void {
@@ -375,35 +1003,51 @@ export class VisitorIntroSequenceController extends Component {
     this.inputStatesCaptured = true;
   }
 
-  private playIntroSequence(): void {
+  private playIntroSequence(): boolean {
     if (
       !this.ready ||
       !this.shutterController ||
       !isValid(this.shutterController, true) ||
       !this.viewportUi ||
       !this.characterUi ||
-      !this.finalStatesCaptured ||
       !this.inputStatesCaptured ||
       this.isDestroying
     ) {
-      return;
+      this.blockIntro('core_guard_failed');
+      return false;
     }
+    if (!this.cacheFinalStates()) {
+      this.blockIntro('final_states_not_captured');
+      return false;
+    }
+    this.restoreFinalStates();
+    this.hideDocumentsBeforeDelivery();
     if (!this.applyPreparedFrames()) {
-      return;
+      this.blockIntro('apply_prepared_frames_failed');
+      return false;
     }
+    this.logIntroStage('guards passed');
 
     this.introPlaying = true;
     this.introFinished = false;
+    if (this.pendingAcceptedCallback) {
+      this.pendingAcceptedCallback();
+      this.pendingAcceptedCallback = null;
+    }
     this.lockMainInput();
+    this.setDocumentHitInteractable(false, false);
     this.shutterController.setInteractionEnabled(false);
     if (!this.shutterController.prepareClosedForIntro()) {
       console.error('[VisitorIntroSequenceController] Failed to prepare shutter closed state.');
       this.restoreButtonStates();
-      return;
+      this.blockIntro('shutter_prepare_closed_failed');
+      return false;
     }
 
     this.computeDocumentSpawnPositions();
     this.applyIntroInitialStates();
+    this.logNodesPreparedState();
+    this.logIntroStage('nodes prepared');
 
     tween(this.node)
       .delay(0.1)
@@ -418,6 +1062,7 @@ export class VisitorIntroSequenceController extends Component {
         if (this.shouldSkipTweenCallback()) {
           return;
         }
+        this.logIntroStage('subject reveal started');
         this.playCharacterEnter();
       })
       .delay(0.64)
@@ -428,6 +1073,7 @@ export class VisitorIntroSequenceController extends Component {
         this.playDocumentPopIn();
       })
       .start();
+    return true;
   }
 
   private playCharacterEnter(): void {
@@ -440,7 +1086,7 @@ export class VisitorIntroSequenceController extends Component {
       return;
     }
     tween(this.carterCharacter)
-      .to(0.54, { position: this.carterFinalState.position.clone() }, { easing: 'cubicOut' })
+      .to(0.54, { position: this.getActiveCharacterPresentationPosition() }, { easing: 'cubicOut' })
       .start();
   }
 
@@ -454,9 +1100,31 @@ export class VisitorIntroSequenceController extends Component {
       !isValid(this.employeeCardVisual, true) ||
       !isValid(this.applicationFormVisual, true)
     ) {
+      this.blockIntro('document_nodes_or_states_invalid');
+      return;
+    }
+    const employeeCardSprite = this.employeeCardVisual.getComponent(Sprite);
+    const applicationFormSprite = this.applicationFormVisual.getComponent(Sprite);
+    if (!employeeCardSprite?.spriteFrame) {
+      this.blockIntro('employee_card_sprite_frame_missing_before_delivery');
+      return;
+    }
+    if (!applicationFormSprite?.spriteFrame) {
+      this.blockIntro('application_sprite_frame_missing_before_delivery');
       return;
     }
 
+    this.setDocumentHitInteractable(false, false);
+    this.applicationFormVisual.active = false;
+    const { employeeCardEnabled } = this.campaignDocumentDeliveryAvailability;
+    if (!employeeCardEnabled) {
+      this.employeeCardVisual.active = false;
+      this.playApplicationDelivery();
+      return;
+    }
+    this.employeeCardVisual.active = true;
+    this.logEmployeeCardMadeVisible();
+    this.logIntroStage('employee card delivery started');
     tween(this.employeeCardVisual)
       .to(
         0.36,
@@ -466,10 +1134,40 @@ export class VisitorIntroSequenceController extends Component {
         },
         { easing: 'backOut' },
       )
+      .call(() => {
+        if (this.shouldSkipTweenCallback()) {
+          return;
+        }
+        this.setDocumentHitInteractable(true, false);
+        this.applicationFormVisual.active = false;
+        this.logIntroStage('employee card delivery completed');
+        this.playApplicationDelivery();
+      })
       .start();
+  }
 
+  private playApplicationDelivery(): void {
+    if (
+      this.shouldSkipTweenCallback() ||
+      !this.applicationFormVisual ||
+      !this.applicationFormFinalState ||
+      !isValid(this.applicationFormVisual, true)
+    ) {
+      return;
+    }
+    const { applicationFormEnabled } = this.campaignDocumentDeliveryAvailability;
+    if (!applicationFormEnabled) {
+      this.applicationFormVisual.active = false;
+      this.logIntroStage('greeting started');
+      this.showRandomGreeting(() => {
+        this.finishIntroSequence();
+      });
+      return;
+    }
+    this.applicationFormVisual.active = true;
+    this.logApplicationMadeVisible();
+    this.logIntroStage('application delivery started');
     tween(this.applicationFormVisual)
-      .delay(0.09)
       .to(
         0.36,
         {
@@ -482,6 +1180,9 @@ export class VisitorIntroSequenceController extends Component {
         if (this.shouldSkipTweenCallback()) {
           return;
         }
+        this.setDocumentHitInteractable(true, true);
+        this.logIntroStage('application delivery completed');
+        this.logIntroStage('greeting started');
         this.showRandomGreeting(() => {
           this.finishIntroSequence();
         });
@@ -495,15 +1196,25 @@ export class VisitorIntroSequenceController extends Component {
     }
     this.introFinished = true;
     this.introPlaying = false;
+    this.completedIntroRoundId = this.activeRunContext.roundId ?? this.completedIntroRoundId;
+    this.activeIntroRoundId = null;
 
     this.restoreFinalStates();
+    this.applyActiveCharacterPresentationTransform();
+    if (!this.campaignDocumentDeliveryAvailability.employeeCardEnabled && this.employeeCardVisual) {
+      this.employeeCardVisual.active = false;
+    }
+    if (!this.campaignDocumentDeliveryAvailability.applicationFormEnabled && this.applicationFormVisual) {
+      this.applicationFormVisual.active = false;
+    }
+    this.logFinalVisualState();
     this.restoreButtonStates();
     if (this.shutterController && isValid(this.shutterController, true)) {
       this.shutterController.setInteractionEnabled(this.getCachedInteractable('BtnShutterHit'));
     }
-    const completion = this.sequenceCompletion;
-    this.sequenceCompletion = null;
-    completion?.();
+    this.logFinalDocumentVisibility();
+    this.logIntroStage('sequence completed');
+    this.resolvePendingResult({ ok: true });
   }
 
   private drawGreetingPanel(): void {
@@ -605,6 +1316,54 @@ export class VisitorIntroSequenceController extends Component {
       });
   }
 
+  private async runVisitorClaimSequence(
+    dialogue: VisitorClaimDialogue,
+    roundId: string,
+    sequenceGeneration: number,
+  ): Promise<void> {
+    const staleResult: VisitorClaimSequenceRunResult = {
+      ok: false,
+      roundId,
+      reason: 'stale_sequence',
+    };
+    try {
+      for (const line of dialogue) {
+        if (!this.isActiveVisitorClaimSequence(roundId, sequenceGeneration)) {
+          this.resolvePendingVisitorClaimSequenceForGeneration(sequenceGeneration, staleResult);
+          return;
+        }
+        await this.showVisitorDialogue(line.text, {
+          allowTapDismiss: true,
+          minimumVisibleSeconds: VisitorIntroSequenceController.VISITOR_CLAIM_MINIMUM_VISIBLE_SECONDS,
+        });
+        if (!this.isActiveVisitorClaimSequence(roundId, sequenceGeneration)) {
+          this.resolvePendingVisitorClaimSequenceForGeneration(sequenceGeneration, staleResult);
+          return;
+        }
+      }
+    } catch {
+      this.resolvePendingVisitorClaimSequenceForGeneration(sequenceGeneration, {
+        ok: false,
+        roundId,
+        reason: 'dialogue_unavailable',
+      });
+      return;
+    }
+
+    if (!this.isActiveVisitorClaimSequence(roundId, sequenceGeneration)) {
+      this.resolvePendingVisitorClaimSequenceForGeneration(sequenceGeneration, staleResult);
+      return;
+    }
+
+    this.activeVisitorClaimSequenceRoundId = null;
+    this.completedVisitorClaimSequenceRoundId = roundId;
+    this.forceCloseGreetingPanel();
+    this.resolvePendingVisitorClaimSequenceForGeneration(sequenceGeneration, {
+      ok: true,
+      roundId,
+    });
+  }
+
   private hideGreeting(): void {
     if (!this.isGreetingVisible) {
       return;
@@ -630,6 +1389,28 @@ export class VisitorIntroSequenceController extends Component {
     completion();
   }
 
+  private forceCloseGreetingPanel(): void {
+    if (!this.isGreetingVisible) {
+      return;
+    }
+    this.isGreetingVisible = false;
+    this.unschedule(this.handleGreetingAutoHide);
+    this.unschedule(this.handleGreetingMinimumVisibleElapsed);
+    this.allowCurrentDialogueTapDismiss = true;
+    this.currentDialogueMinimumVisibleElapsed = true;
+    if (this.greetingDismissButton && isValid(this.greetingDismissButton, true)) {
+      this.greetingDismissButton.interactable = false;
+    }
+    if (this.greetingRuntime && isValid(this.greetingRuntime, true)) {
+      this.greetingRuntime.active = false;
+    }
+    const completion = this.greetingCompletion;
+    this.greetingCompletion = null;
+    if (completion) {
+      completion();
+    }
+  }
+
   private clearIntroRuntimeState(): void {
     this.unschedule(this.handleGreetingAutoHide);
     this.unschedule(this.handleGreetingMinimumVisibleElapsed);
@@ -643,13 +1424,14 @@ export class VisitorIntroSequenceController extends Component {
     this.greetingMinimumVisibleSessionId = 0;
     this.allowCurrentDialogueTapDismiss = true;
     this.currentDialogueMinimumVisibleElapsed = true;
-    this.sequenceCompletion = null;
+    this.pendingAcceptedCallback = null;
     if (this.greetingDismissButton && isValid(this.greetingDismissButton, true)) {
       this.greetingDismissButton.interactable = false;
     }
     if (this.greetingRuntime && isValid(this.greetingRuntime, true)) {
       this.greetingRuntime.active = false;
     }
+    this.hideDocumentsBeforeDelivery();
   }
 
   private computeDocumentSpawnPositions(): void {
@@ -684,26 +1466,34 @@ export class VisitorIntroSequenceController extends Component {
       return;
     }
 
-    const startX =
+    const viewportLeftStartX =
       -(this.viewportUi.contentSize.width / 2) - (this.characterUi.contentSize.width / 2) - 20;
+    const finalPosition = this.getActiveCharacterPresentationPosition();
+    const finalScale = this.getActiveCharacterPresentationScale();
+    const introOffsetX = viewportLeftStartX - finalPosition.x;
+    const startX = finalPosition.x + introOffsetX;
     this.carterCharacter.setPosition(
-      new Vec3(startX, this.carterFinalState.position.y, this.carterFinalState.position.z),
+      new Vec3(startX, finalPosition.y, finalPosition.z),
     );
-    this.carterCharacter.setScale(this.carterFinalState.scale.clone());
+    this.carterCharacter.setScale(finalScale);
     this.carterCharacter.setRotation(this.carterFinalState.rotation.clone());
-    this.carterCharacter.active = this.carterFinalState.active;
+    this.carterCharacter.active = true;
 
-    const cardStartScale = this.employeeCardFinalState.scale.clone().multiplyScalar(0.24);
+    const cardStartScale = this.employeeCardFinalState.scale
+      .clone()
+      .multiplyScalar(VisitorIntroSequenceController.DOCUMENT_INTRO_SCALE_FACTOR);
     this.employeeCardVisual.setPosition(this.documentSpawnPosition);
     this.employeeCardVisual.setScale(cardStartScale);
     this.employeeCardVisual.setRotation(this.employeeCardFinalState.rotation.clone());
-    this.employeeCardVisual.active = true;
+    this.employeeCardVisual.active = false;
 
-    const formStartScale = this.applicationFormFinalState.scale.clone().multiplyScalar(0.24);
+    const formStartScale = this.applicationFormFinalState.scale
+      .clone()
+      .multiplyScalar(VisitorIntroSequenceController.DOCUMENT_INTRO_SCALE_FACTOR);
     this.applicationFormVisual.setPosition(this.applicationSpawnPosition);
     this.applicationFormVisual.setScale(formStartScale);
     this.applicationFormVisual.setRotation(this.applicationFormFinalState.rotation.clone());
-    this.applicationFormVisual.active = true;
+    this.applicationFormVisual.active = false;
   }
 
   private lockMainInput(): void {
@@ -726,6 +1516,12 @@ export class VisitorIntroSequenceController extends Component {
         state.button.interactable = state.interactable;
       }
     }
+    this.setDocumentHitInteractable(
+      this.campaignDocumentDeliveryAvailability.employeeCardEnabled &&
+        this.getCachedInteractable('EmployeeCardHit'),
+      this.campaignDocumentDeliveryAvailability.applicationFormEnabled &&
+        this.getCachedInteractable('ApplicationFormHit'),
+    );
   }
 
   private restoreFinalStates(): void {
@@ -767,8 +1563,7 @@ export class VisitorIntroSequenceController extends Component {
     }
     characterSprite.spriteFrame = this.preparedCharacterFrame;
     this.applyCharacterContainByFrame(this.preparedCharacterFrame);
-    this.cacheFinalStates();
-    return this.finalStatesCaptured;
+    return true;
   }
 
   private applyCharacterContainByFrame(frame: SpriteFrame): void {
@@ -784,21 +1579,97 @@ export class VisitorIntroSequenceController extends Component {
     const maxHeight = this.viewportUi.contentSize.height * 0.92;
     const scale = Math.min(maxWidth / sourceWidth, maxHeight / sourceHeight);
     this.characterUi.setContentSize(sourceWidth * scale, sourceHeight * scale);
+    this.applyActiveCharacterPresentationTransform();
+  }
+
+  private applyActiveCharacterPresentationTransform(): void {
+    if (!this.carterCharacter || !isValid(this.carterCharacter, true)) {
+      return;
+    }
+    this.carterCharacter.setPosition(this.getActiveCharacterPresentationPosition());
+    this.carterCharacter.setScale(this.getActiveCharacterPresentationScale());
+  }
+
+  private getActiveCharacterPresentationPosition(): Vec3 {
+    if (!this.carterFinalState) {
+      return this.carterCharacter?.position.clone() ?? new Vec3();
+    }
+    const presentation = this.resolveActiveEmployeeWindowPortraitPresentation();
+    return new Vec3(
+      this.carterFinalState.position.x + presentation.offsetX,
+      this.carterFinalState.position.y + presentation.offsetY,
+      this.carterFinalState.position.z,
+    );
+  }
+
+  private getActiveCharacterPresentationScale(): Vec3 {
+    if (!this.carterFinalState) {
+      return this.carterCharacter?.scale.clone() ?? new Vec3(1, 1, 1);
+    }
+    const presentation = this.resolveActiveEmployeeWindowPortraitPresentation();
+    return new Vec3(
+      this.carterFinalState.scale.x * presentation.scale,
+      this.carterFinalState.scale.y * presentation.scale,
+      this.carterFinalState.scale.z,
+    );
+  }
+
+  private resolveActiveEmployeeWindowPortraitPresentation(): {
+    scale: number;
+    offsetX: number;
+    offsetY: number;
+  } {
+    const defaults = { scale: 1, offsetX: 0, offsetY: 0 };
+    const employeeKey = this.activeRunContext.employeeKey;
+    if (!employeeKey) {
+      return defaults;
+    }
+    if (!(employeeKey in EMPLOYEE_PROFILES)) {
+      return defaults;
+    }
+    const profile = EMPLOYEE_PROFILES[employeeKey as EmployeeKey];
+    const presentation: WindowPortraitPresentation | undefined = profile.windowPortraitPresentation;
+    if (!presentation) {
+      return defaults;
+    }
+    const scale = Number.isFinite(presentation.scale) && (presentation.scale ?? 0) > 0 ? presentation.scale! : 1;
+    const offsetX = Number.isFinite(presentation.offsetX) ? presentation.offsetX! : 0;
+    const offsetY = Number.isFinite(presentation.offsetY) ? presentation.offsetY! : 0;
+    return { scale, offsetX, offsetY };
   }
 
   private getCachedInteractable(nodeName: string): boolean {
     return this.buttonStates.find((state) => state.nodeName === nodeName)?.interactable ?? false;
   }
 
+  private hideDocumentsBeforeDelivery(): void {
+    if (this.isDestroying) {
+      return;
+    }
+    if (this.employeeCardVisual && isValid(this.employeeCardVisual, true)) {
+      Tween.stopAllByTarget(this.employeeCardVisual);
+      this.employeeCardVisual.active = false;
+    }
+    if (this.applicationFormVisual && isValid(this.applicationFormVisual, true)) {
+      Tween.stopAllByTarget(this.applicationFormVisual);
+      this.applicationFormVisual.active = false;
+    }
+    this.setDocumentHitInteractable(false, false);
+    this.logDocumentsHiddenBeforeDelivery();
+  }
+
   private captureTransformState(node: Node | null): TransformStateCache | null {
     if (!node || !isValid(node, true)) {
       return null;
     }
+    const uiOpacity = node.getComponent(UIOpacity);
     return {
       position: node.position.clone(),
       scale: node.scale.clone(),
       rotation: node.rotation.clone(),
       active: node.active,
+      opacity: uiOpacity?.opacity ?? null,
+      siblingIndex: node.getSiblingIndex(),
     };
   }
 
@@ -817,11 +1688,330 @@ export class VisitorIntroSequenceController extends Component {
     node.setPosition(state.position.clone());
     node.setScale(state.scale.clone());
     node.setRotation(state.rotation.clone());
+    const uiOpacity = node.getComponent(UIOpacity);
+    if (uiOpacity && state.opacity !== null) {
+      uiOpacity.opacity = state.opacity;
+    }
+    if (node.parent && isValid(node.parent, true)) {
+      node.setSiblingIndex(state.siblingIndex);
+    }
     node.active = state.active;
   }
 
   private shouldSkipTweenCallback(): boolean {
     return this.isDestroying || !isValid(this, true) || !isValid(this.node, true);
+  }
+
+  private logIntroStage(
+    stage:
+      | 'request received'
+      | 'guards passed'
+      | 'nodes prepared'
+      | 'subject reveal started'
+      | 'employee card delivery started'
+      | 'employee card delivery completed'
+      | 'application delivery started'
+      | 'application delivery completed'
+      | 'greeting started'
+      | 'sequence completed',
+  ): void {
+    console.info(`[VisitorIntro] ${stage}`, {
+      roundId: this.activeRunContext.roundId,
+      employeeKey: this.activeRunContext.employeeKey,
+      caseKind: this.activeRunContext.caseKind,
+    });
+  }
+
+  private blockIntro(reason: string): VisitorIntroResult {
+    this.lastBlockReason = reason;
+    this.introPlaying = false;
+    if (this.activeRunContext.roundId && this.activeIntroRoundId === this.activeRunContext.roundId) {
+      this.activeIntroRoundId = null;
+    }
+    console.error('[VisitorIntro] blocked', {
+      roundId: this.activeRunContext.roundId,
+      employeeKey: this.activeRunContext.employeeKey,
+      caseKind: this.activeRunContext.caseKind,
+      blockReason: reason,
+      state: {
+        ready: this.ready,
+        hasPlayedIntro: this.hasPlayedIntro,
+        introPlaying: this.introPlaying,
+        introFinished: this.introFinished,
+        isDestroying: this.isDestroying,
+        finalStatesCaptured: this.finalStatesCaptured,
+        inputStatesCaptured: this.inputStatesCaptured,
+        hasPreparedCharacterFrame: Boolean(this.preparedCharacterFrame),
+      },
+      missingNodes: this.collectMissingNodeNames(),
+    });
+    this.restoreButtonStates();
+    this.resolvePendingResult({ ok: false, reason });
+    return { ok: false, reason };
+  }
+
+  private rejectInvalidRoundContext(): VisitorIntroResult {
+    this.lastBlockReason = 'invalid_round_context';
+    console.error('[VisitorIntro] blocked', {
+      roundId: this.activeRunContext.roundId,
+      employeeKey: this.activeRunContext.employeeKey,
+      caseKind: this.activeRunContext.caseKind,
+      blockReason: 'invalid_round_context',
+    });
+    return { ok: false, reason: 'invalid_round_context' };
+  }
+
+  private hasValidRoundContext(
+    context: VisitorIntroRunContext,
+  ): context is { roundId: string; employeeKey: string; caseKind: string } {
+    return Boolean(context.roundId && context.employeeKey && context.caseKind);
+  }
+
+  private incrementIntroRequestCount(roundId: string): void {
+    this.introRequestCountByRound.set(roundId, (this.introRequestCountByRound.get(roundId) ?? 0) + 1);
+  }
+
+  private getIntroRequestCountForCurrentRound(): number {
+    const roundId = this.activeRunContext.roundId;
+    if (!roundId) {
+      return 0;
+    }
+    return this.introRequestCountByRound.get(roundId) ?? 0;
+  }
+
+  private setDocumentHitInteractable(employeeCard: boolean, applicationForm: boolean): void {
+    this.setButtonInteractableByName('EmployeeCardHit', employeeCard);
+    this.setButtonInteractableByName('ApplicationFormHit', applicationForm);
+  }
+
+  private getButtonInteractableByName(nodeName: string): boolean | null {
+    const cached = this.buttonStates.find((state) => state.nodeName === nodeName) ?? null;
+    if (!cached || !isValid(cached.button, true) || !isValid(cached.button.node, true)) {
+      return null;
+    }
+    return cached.button.interactable;
+  }
+
+  private setButtonInteractableByName(nodeName: string, interactable: boolean): void {
+    const cached = this.buttonStates.find((state) => state.nodeName === nodeName) ?? null;
+    if (!cached || !isValid(cached.button, true) || !isValid(cached.button.node, true)) {
+      return;
+    }
+    cached.button.interactable = interactable;
+  }
+
+  private logDocumentsHiddenBeforeDelivery(): void {
+    console.info('[VisitorIntro] documents hidden before delivery', {
+      roundId: this.activeRunContext.roundId,
+      employeeKey: this.activeRunContext.employeeKey,
+      caseKind: this.activeRunContext.caseKind,
+      employeeCard: {
+        active: this.employeeCardVisual?.active ?? null,
+        hitInteractable: this.getButtonInteractableByName('EmployeeCardHit'),
+        position: this.employeeCardVisual
+          ? {
+              x: this.employeeCardVisual.position.x,
+              y: this.employeeCardVisual.position.y,
+              z: this.employeeCardVisual.position.z,
+            }
+          : null,
+        scale: this.employeeCardVisual
+          ? {
+              x: this.employeeCardVisual.scale.x,
+              y: this.employeeCardVisual.scale.y,
+              z: this.employeeCardVisual.scale.z,
+            }
+          : null,
+      },
+      application: {
+        active: this.applicationFormVisual?.active ?? null,
+        hitInteractable: this.getButtonInteractableByName('ApplicationFormHit'),
+        position: this.applicationFormVisual
+          ? {
+              x: this.applicationFormVisual.position.x,
+              y: this.applicationFormVisual.position.y,
+              z: this.applicationFormVisual.position.z,
+            }
+          : null,
+        scale: this.applicationFormVisual
+          ? {
+              x: this.applicationFormVisual.scale.x,
+              y: this.applicationFormVisual.scale.y,
+              z: this.applicationFormVisual.scale.z,
+            }
+          : null,
+      },
+    });
+  }
+
+  private logEmployeeCardMadeVisible(): void {
+    console.info('[VisitorIntro] employee card made visible', {
+      roundId: this.activeRunContext.roundId,
+      employeeKey: this.activeRunContext.employeeKey,
+      caseKind: this.activeRunContext.caseKind,
+    });
+  }
+
+  private logApplicationMadeVisible(): void {
+    console.info('[VisitorIntro] application made visible', {
+      roundId: this.activeRunContext.roundId,
+      employeeKey: this.activeRunContext.employeeKey,
+      caseKind: this.activeRunContext.caseKind,
+    });
+  }
+
+  private logFinalDocumentVisibility(): void {
+    console.info('[VisitorIntro] final document visibility', {
+      roundId: this.activeRunContext.roundId,
+      employeeKey: this.activeRunContext.employeeKey,
+      caseKind: this.activeRunContext.caseKind,
+      employeeCard: {
+        active: this.employeeCardVisual?.active ?? null,
+        hitInteractable: this.getButtonInteractableByName('EmployeeCardHit'),
+      },
+      application: {
+        active: this.applicationFormVisual?.active ?? null,
+        hitInteractable: this.getButtonInteractableByName('ApplicationFormHit'),
+      },
+    });
+  }
+
+  private collectMissingNodeNames(): string[] {
+    return [
+      !this.windowRuntime && 'WindowRuntime',
+      !this.windowViewport && 'WindowViewport',
+      !this.shutterVisual && 'WindowShutterVisual',
+      !this.carterCharacter && 'CarterCharacter',
+      !this.employeeCardVisual && 'EmployeeCardVisual',
+      !this.applicationFormVisual && 'ApplicationFormVisual',
+      !this.shutterController && 'BtnShutterHit(ShutterToggleController)',
+      !this.greetingRuntime && 'VisitorGreetingRuntime',
+      !this.greetingLabel && 'VisitorGreetingLabel(Label)',
+      !this.greetingDismissButton && 'VisitorGreetingDismissHit(Button)',
+      !this.viewportUi && 'WindowViewport(UITransform)',
+      !this.characterUi && 'CarterCharacter(UITransform)',
+      !this.deskUi && 'DeskEvidenceRuntime(UITransform)',
+    ].filter(Boolean) as string[];
+  }
+
+  private logNodesPreparedState(): void {
+    console.info('[VisitorIntro] nodes prepared state', {
+      roundId: this.activeRunContext.roundId,
+      employeeKey: this.activeRunContext.employeeKey,
+      caseKind: this.activeRunContext.caseKind,
+      subjectNode: this.captureNodeState(this.carterCharacter),
+      employeeCardNode: this.captureNodeState(this.employeeCardVisual),
+      applicationNode: this.captureNodeState(this.applicationFormVisual),
+    });
+  }
+
+  private logFinalVisualState(): void {
+    console.info('[VisitorIntro] final visual state', {
+      roundId: this.activeRunContext.roundId,
+      employeeKey: this.activeRunContext.employeeKey,
+      caseKind: this.activeRunContext.caseKind,
+      introRequestCountForRound: this.getIntroRequestCountForCurrentRound(),
+      subjectNode: this.captureNodeState(this.carterCharacter),
+      employeeCardNode: this.captureNodeState(this.employeeCardVisual),
+      applicationNode: this.captureNodeState(this.applicationFormVisual),
+    });
+  }
+
+  private captureNodeState(node: Node | null): Record<string, unknown> | null {
+    if (!node || !isValid(node, true)) {
+      return null;
+    }
+    const sprite = node.getComponent(Sprite);
+    const uiTransform = node.getComponent(UITransform);
+    const uiOpacity = node.getComponent(UIOpacity);
+    const parent = node.parent;
+    const parentOpacity = parent?.getComponent(UIOpacity) ?? null;
+    return {
+      path: this.buildNodePath(node),
+      active: node.active,
+      spriteEnabled: sprite?.enabled ?? null,
+      hasSpriteFrame: Boolean(sprite?.spriteFrame),
+      opacity: uiOpacity?.opacity ?? null,
+      position: { x: node.position.x, y: node.position.y, z: node.position.z },
+      scale: { x: node.scale.x, y: node.scale.y, z: node.scale.z },
+      size: uiTransform
+        ? { width: uiTransform.contentSize.width, height: uiTransform.contentSize.height }
+        : null,
+      anchor: uiTransform ? { x: uiTransform.anchorX, y: uiTransform.anchorY } : null,
+      siblingIndex: node.getSiblingIndex(),
+      parentActive: parent?.active ?? null,
+      parentOpacity: parentOpacity?.opacity ?? null,
+    };
+  }
+
+  private buildNodePath(node: Node): string {
+    const names: string[] = [];
+    let cursor: Node | null = node;
+    while (cursor) {
+      names.unshift(cursor.name);
+      cursor = cursor.parent;
+    }
+    return names.join('/');
+  }
+
+  private resolvePendingResult(result: VisitorIntroResult): void {
+    const resolver = this.pendingResultResolver;
+    this.pendingResultResolver = null;
+    if (resolver) {
+      resolver(result);
+    }
+  }
+
+  private resolvePendingVisitorClaimSequenceForGeneration(
+    sequenceGeneration: number,
+    result: VisitorClaimSequenceRunResult,
+  ): void {
+    const pending = this.pendingVisitorClaimSequence;
+    if (!pending || pending.generation !== sequenceGeneration) {
+      return;
+    }
+    this.pendingVisitorClaimSequence = null;
+    pending.resolve(result);
+  }
+
+  private isEmployeeIntroSequenceInProgress(): boolean {
+    return this.introPlaying || this.activeIntroRoundId !== null || this.pendingResultResolver !== null;
+  }
+
+  private isActiveVisitorClaimSequence(roundId: string, sequenceGeneration: number): boolean {
+    return (
+      !this.isDestroying &&
+      this.visitorClaimSequenceGeneration === sequenceGeneration &&
+      this.activeVisitorClaimSequenceRoundId === roundId
+    );
+  }
+
+  private validateVisitorClaimSequenceContext(context: VisitorClaimSequenceRunContext): string | null {
+    if (!context || typeof context !== 'object') {
+      return null;
+    }
+    if (typeof context.roundId !== 'string' || context.roundId.trim().length === 0) {
+      return null;
+    }
+    if (!Array.isArray(context.dialogue) || context.dialogue.length !== 3) {
+      return null;
+    }
+    const expectedKinds = ['claimed-name', 'claimed-department', 'claimed-purpose'] as const;
+    for (let index = 0; index < expectedKinds.length; index += 1) {
+      const line = context.dialogue[index];
+      if (!line || typeof line !== 'object' || line.kind !== expectedKinds[index]) {
+        return null;
+      }
+      if (
+        typeof line.text !== 'string' ||
+        line.text.trim().length === 0 ||
+        line.text.includes('\n') ||
+        line.text.includes('\r')
+      ) {
+        return null;
+      }
+    }
+    return context.roundId;
   }
 
   private normalizeDialogueSeconds(value: number | undefined, fallback: number): number {
