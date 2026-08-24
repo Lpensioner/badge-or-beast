@@ -19,7 +19,12 @@ const { ccclass } = _decorator;
 
 const CANVAS_WIDTH = 720;
 const CANVAS_HEIGHT = 1280;
+const SETTINGS_BUTTON_HIT_SIZE = 84;
+const SETTINGS_BUTTON_VISUAL_MAX_SIZE = 60;
 const SETTINGS_BUTTON_NAME = 'SettingsButton';
+const SETTINGS_BUTTON_ASSET_SOURCE_NAME = 'SettingsButtonAssetSource';
+const LEGACY_GAME_SETTINGS_BUTTON_NAME = 'GameReturnHomeButtonRuntime';
+const LEGACY_GAME_SETTINGS_BUTTON_VISUAL_NAME = 'GameReturnHomeButtonVisual';
 const SETTINGS_OVERLAY_NAME = 'SettingsOverlay';
 const SETTINGS_PANEL_NAME = 'SettingsPanel';
 const HOME_SCENE_NAME = 'HomeScene';
@@ -50,6 +55,7 @@ export class SettingsPanelController extends Component {
   private uiReady = false;
   private sceneSwitching = false;
   private buildingUi = false;
+  private usingExternalGameButton = false;
 
   onLoad(): void {
     this.canvas = this.resolveCanvas();
@@ -94,6 +100,16 @@ export class SettingsPanelController extends Component {
     this.panelOpen = false;
   }
 
+  public openSettingsFromExternalTrigger(): void {
+    if (!this.uiReady || this.panelOpen) {
+      return;
+    }
+    const audio = this.getAudioManager();
+    audio.playCachedSettingsClick();
+    audio.handleUserGesture();
+    this.openSettings();
+  }
+
   private resolveCanvas(): Node | null {
     let current: Node | null = this.node;
     while (current) {
@@ -110,8 +126,16 @@ export class SettingsPanelController extends Component {
       return;
     }
     this.buildingUi = true;
+    this.usingExternalGameButton = false;
 
     this.settingsButton = this.canvas.getChildByName(SETTINGS_BUTTON_NAME);
+    if (!this.settingsButton && this.isGameScene()) {
+      const legacyButton = this.canvas.getChildByName(LEGACY_GAME_SETTINGS_BUTTON_NAME);
+      if (legacyButton?.isValid) {
+        this.settingsButton = legacyButton;
+        this.usingExternalGameButton = true;
+      }
+    }
     if (!this.settingsButton) {
       this.settingsButton = this.createSettingsButton(this.canvas);
     }
@@ -125,7 +149,7 @@ export class SettingsPanelController extends Component {
     this.returnHomeButton = this.settingsPanel?.getChildByName('ReturnHomeButton') ?? null;
     this.sanitizeCloseButtonHotspot();
 
-    this.settingsButtonComp = this.settingsButton.getComponent(Button);
+    this.settingsButtonComp = this.resolveSettingsButtonComponent(this.settingsButton);
     this.closeButtonComp = this.settingsPanel?.getChildByName('CloseButton')?.getComponent(Button) ?? null;
     this.returnHomeButtonComp = this.returnHomeButton?.getComponent(Button) ?? null;
     this.soundButtonComp = this.settingsPanel?.getChildByName('SoundRow')?.getComponent(Button) ?? null;
@@ -144,6 +168,7 @@ export class SettingsPanelController extends Component {
     this.layoutPanelContent();
     this.refreshReturnHomeVisibility();
     this.redrawToggleIcons();
+    this.applySettingsButtonSpriteFromSceneSource();
     if (this.settingsButton) {
       this.settingsButton.setSiblingIndex(this.canvas.children.length - 1);
     }
@@ -153,6 +178,17 @@ export class SettingsPanelController extends Component {
     this.loadSprites();
   }
 
+  private resolveSettingsButtonComponent(buttonRoot: Node): Button | null {
+    const directButton = buttonRoot.getComponent(Button);
+    if (directButton) {
+      return directButton;
+    }
+    if (!this.isGameScene()) {
+      return null;
+    }
+    return buttonRoot.getChildByName('GameReturnHomeButtonHit')?.getComponent(Button) ?? null;
+  }
+
   private createSettingsButton(parent: Node): Node {
     const buttonNode = new Node(SETTINGS_BUTTON_NAME);
     parent.addChild(buttonNode);
@@ -160,13 +196,15 @@ export class SettingsPanelController extends Component {
     buttonNode.setPosition(-300, 585, 0);
 
     const transform = buttonNode.addComponent(UITransform);
-    transform.setContentSize(96, 96);
+    transform.setContentSize(SETTINGS_BUTTON_HIT_SIZE, SETTINGS_BUTTON_HIT_SIZE);
     transform.setAnchorPoint(0.5, 0.5);
 
     const visual = new Node('SettingsButtonVisual');
     buttonNode.addChild(visual);
     visual.layer = parent.layer;
-    visual.addComponent(UITransform).setContentSize(96, 96);
+    visual
+      .addComponent(UITransform)
+      .setContentSize(SETTINGS_BUTTON_VISUAL_MAX_SIZE, SETTINGS_BUTTON_VISUAL_MAX_SIZE);
     visual.addComponent(Sprite);
 
     const button = buttonNode.addComponent(Button);
@@ -278,7 +316,7 @@ export class SettingsPanelController extends Component {
     const labelNode = new Node('Label');
     row.addChild(labelNode);
     labelNode.layer = panel.layer;
-    labelNode.setPosition(36, -2, 0);
+    labelNode.setPosition(64, -2, 0);
     const labelTransform = labelNode.addComponent(UITransform);
     labelTransform.setContentSize(260, 60);
     labelTransform.setAnchorPoint(0.5, 0.5);
@@ -306,7 +344,7 @@ export class SettingsPanelController extends Component {
     panel.addChild(buttonNode);
     buttonNode.layer = panel.layer;
     const buttonTransform = buttonNode.addComponent(UITransform);
-    buttonTransform.setContentSize(360, 64);
+    buttonTransform.setContentSize(400, 72);
     buttonTransform.setAnchorPoint(0.5, 0.5);
 
     const labelNode = new Node('ReturnHomeLabel');
@@ -314,10 +352,10 @@ export class SettingsPanelController extends Component {
     labelNode.layer = panel.layer;
     labelNode.setPosition(0, 0, 0);
     const labelTransform = labelNode.addComponent(UITransform);
-    labelTransform.setContentSize(360, 64);
+    labelTransform.setContentSize(400, 72);
     labelTransform.setAnchorPoint(0.5, 0.5);
     const label = labelNode.addComponent(Label);
-    label.string = 'Return Home';
+    label.string = 'Return to Home';
     label.fontSize = 34;
     label.lineHeight = 40;
     label.horizontalAlign = Label.HorizontalAlign.CENTER;
@@ -347,7 +385,7 @@ export class SettingsPanelController extends Component {
     const panelWidth = panelTransform?.contentSize.width || 560;
 
     // Content area sits on the paper region inside the clipboard frame.
-    const paperTop = panelHeight * 0.28;
+    const paperTop = panelHeight * 0.27;
     const paperBottom = -panelHeight * 0.34;
     const paperCenterY = (paperTop + paperBottom) * 0.5;
 
@@ -358,7 +396,7 @@ export class SettingsPanelController extends Component {
     }
 
     const rowNames = ['SoundRow', 'MusicRow', 'VoiceRow'];
-    const rowGap = 118;
+    const rowGap = 124;
     const rowsTop = paperCenterY + rowGap;
     for (let i = 0; i < rowNames.length; i++) {
       const row = this.settingsPanel.getChildByName(rowNames[i]);
@@ -369,12 +407,13 @@ export class SettingsPanelController extends Component {
 
     const returnHome = this.settingsPanel.getChildByName('ReturnHomeButton');
     if (returnHome) {
-      // Keep clear of the clipboard bottom border.
-      returnHome.setPosition(0, paperBottom + 36, 0);
+      // Keep visual rhythm with rows and clear bottom border.
+      returnHome.setPosition(0, rowsTop - rowGap * 3 - 8, 0);
     }
   }
 
   private loadSprites(): void {
+    const sourceAssigned = this.applySettingsButtonSpriteFromSceneSource();
     resources.load('ui/game/settings/ui_settings_button/spriteFrame', SpriteFrame, (error, frame) => {
       if (error || !frame || !this.settingsButton?.isValid) {
         if (error) {
@@ -382,13 +421,23 @@ export class SettingsPanelController extends Component {
         }
         return;
       }
-      const visual = this.settingsButton.getChildByName('SettingsButtonVisual');
-      const sprite = visual?.getComponent(Sprite) ?? null;
-      if (!sprite || !visual) {
+      const resolved = this.resolveSettingsButtonVisualAndSprite();
+      if (!resolved) {
+        return;
+      }
+      const { visual, sprite } = resolved;
+      if (sourceAssigned && sprite.spriteFrame === frame) {
         return;
       }
       sprite.spriteFrame = frame;
-      this.applyContainSize(visual, frame, 96, 96);
+      if (!this.usingExternalGameButton) {
+        this.applyContainSize(
+          visual,
+          frame,
+          SETTINGS_BUTTON_VISUAL_MAX_SIZE,
+          SETTINGS_BUTTON_VISUAL_MAX_SIZE,
+        );
+      }
     });
 
     resources.load('ui/game/settings/ui_settings_panel_bg/spriteFrame', SpriteFrame, (error, frame) => {
@@ -414,6 +463,56 @@ export class SettingsPanelController extends Component {
     });
   }
 
+  private resolveSettingsButtonVisualAndSprite(): { visual: Node; sprite: Sprite } | null {
+    if (!this.settingsButton?.isValid) {
+      return null;
+    }
+    const visual =
+      this.settingsButton.getChildByName('SettingsButtonVisual') ??
+      this.settingsButton.getChildByName(LEGACY_GAME_SETTINGS_BUTTON_VISUAL_NAME);
+    if (!visual?.isValid) {
+      return null;
+    }
+    const sprite = visual.getComponent(Sprite);
+    if (!sprite) {
+      return null;
+    }
+    return { visual, sprite };
+  }
+
+  private applySettingsButtonSpriteFromSceneSource(): boolean {
+    const sourceFrame = this.getSettingsButtonSourceFrame();
+    if (!sourceFrame) {
+      return false;
+    }
+    const resolved = this.resolveSettingsButtonVisualAndSprite();
+    if (!resolved) {
+      return false;
+    }
+    const { visual, sprite } = resolved;
+    sprite.spriteFrame = sourceFrame;
+    if (!this.usingExternalGameButton) {
+      this.applyContainSize(
+        visual,
+        sourceFrame,
+        SETTINGS_BUTTON_VISUAL_MAX_SIZE,
+        SETTINGS_BUTTON_VISUAL_MAX_SIZE,
+      );
+    }
+    return true;
+  }
+
+  private getSettingsButtonSourceFrame(): SpriteFrame | null {
+    if (!this.canvas?.isValid) {
+      return null;
+    }
+    const sourceNode = this.canvas.getChildByName(SETTINGS_BUTTON_ASSET_SOURCE_NAME);
+    if (!sourceNode?.isValid) {
+      return null;
+    }
+    return sourceNode.getComponent(Sprite)?.spriteFrame ?? null;
+  }
+
   private applyContainSize(node: Node, frame: SpriteFrame, maxWidth: number, maxHeight: number): void {
     const transform = node.getComponent(UITransform);
     if (!transform) {
@@ -429,7 +528,9 @@ export class SettingsPanelController extends Component {
   }
 
   private bindEvents(): void {
-    this.settingsButtonComp?.node.on(Button.EventType.CLICK, this.onSettingsButtonClick, this);
+    if (!this.usingExternalGameButton) {
+      this.settingsButtonComp?.node.on(Button.EventType.CLICK, this.onSettingsButtonClick, this);
+    }
     this.closeButtonComp?.node.on(Button.EventType.CLICK, this.onCloseClick, this);
     this.returnHomeButtonComp?.node.on(Button.EventType.CLICK, this.onReturnHomeClick, this);
     this.soundButtonComp?.node.on(Button.EventType.CLICK, this.onSoundClick, this);
@@ -438,7 +539,9 @@ export class SettingsPanelController extends Component {
   }
 
   private unbindEvents(): void {
-    this.settingsButtonComp?.node.off(Button.EventType.CLICK, this.onSettingsButtonClick, this);
+    if (!this.usingExternalGameButton) {
+      this.settingsButtonComp?.node.off(Button.EventType.CLICK, this.onSettingsButtonClick, this);
+    }
     this.closeButtonComp?.node.off(Button.EventType.CLICK, this.onCloseClick, this);
     this.returnHomeButtonComp?.node.off(Button.EventType.CLICK, this.onReturnHomeClick, this);
     this.soundButtonComp?.node.off(Button.EventType.CLICK, this.onSoundClick, this);

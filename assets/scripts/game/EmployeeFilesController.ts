@@ -3,8 +3,10 @@ import {
   assetManager,
   Button,
   Component,
+  EventTouch,
   isValid,
   Label,
+  Mask,
   Node,
   Sprite,
   SpriteFrame,
@@ -19,6 +21,7 @@ import {
   showInteractivePanel,
 } from './InteractivePanelTransition';
 import { AudioManager } from '../audio/AudioManager';
+import { EMPLOYEE_PROFILES } from './inspection/EmployeeProfileCatalog';
 
 const { ccclass } = _decorator;
 
@@ -27,15 +30,17 @@ const CLOSE_DURATION = 0.18;
 const OPEN_EASING = 'cubicOut' as const;
 const CLOSE_EASING = 'cubicInOut' as const;
 const MOVE_RATIO = 0.7;
-const SAM_PORTRAIT_SPRITEFRAME_UUID = '77bf3f53-9419-49d9-9e02-5e6842ea43f9@f9941';
-const MARK_PORTRAIT_SPRITEFRAME_UUID = 'fb1193ad-141b-4e72-ab0c-37806ded9939@f9941';
-const JAKE_PORTRAIT_SPRITEFRAME_UUID = 'b4b7f2e2-ea45-495a-b888-70dba58ac1ae@f9941';
-const ALICE_PORTRAIT_SPRITEFRAME_UUID = '38f109ef-60af-4c94-8c34-6cfb9c3d0af3@f9941';
-const CLARA_PORTRAIT_SPRITEFRAME_UUID = 'd296e6b0-12d1-4d2a-8b07-b7cb637d0b69@f9941';
-const GRACE_PORTRAIT_SPRITEFRAME_UUID = 'cfd87454-5786-43b6-b729-a87bbf647aaf@f9941';
-const MAYA_PORTRAIT_SPRITEFRAME_UUID = 'cfb9609c-abeb-4034-9a6f-a654fe4a39c1@f9941';
+const SAM_PORTRAIT_SPRITEFRAME_UUID = '4109284e-e557-4d77-9bbc-ec2a80ae0ac0@f9941';
+const MARK_PORTRAIT_SPRITEFRAME_UUID = '7ef2a95f-1202-4dae-b870-3a7a9081053f@f9941';
+const JAKE_PORTRAIT_SPRITEFRAME_UUID = '2acf45bf-0a65-4f48-8b15-c21ddb8017ea@f9941';
+const ALICE_PORTRAIT_SPRITEFRAME_UUID = 'edcdcd60-e964-4dd4-aa1c-8b7efd9aafd8@f9941';
+const CLARA_PORTRAIT_SPRITEFRAME_UUID = 'fc16b2e5-0f2f-4338-8a46-71271e897659@f9941';
+const GRACE_PORTRAIT_SPRITEFRAME_UUID = '8c81e690-9798-424b-92ce-187d07f59875@f9941';
+const MAYA_PORTRAIT_SPRITEFRAME_UUID = '248475dc-6653-4d97-b5eb-55fafd7efa14@f9941';
+const PLAYER_TRUE_IDENTITY_PORTRAIT_SPRITEFRAME_UUID = '8ada3c94-c810-48f3-a7b0-2e22bb5f760b@f9941';
 
 interface CachedButtonState {
+  nodeName: string;
   button: Button;
   enabled: boolean;
   interactable: boolean;
@@ -47,6 +52,25 @@ interface RegisteredButtonHandler {
 }
 
 type InspectionSubjectId = 'carter' | 'ethan';
+interface Day0EndingPlayerProfile {
+  readonly name: string;
+  readonly employeeId: string;
+  readonly department: string;
+  readonly position: string;
+  readonly appearanceFeatures: readonly string[];
+}
+
+const DAY0_ENDING_PLAYER_PROFILE: Day0EndingPlayerProfile = Object.freeze({
+  name: 'UNKNOWN',
+  employeeId: 'UNKNOWN',
+  department: 'AUDITOR RECORD',
+  position: 'SECURITY REVIEWER',
+  appearanceFeatures: Object.freeze([
+    'Facial record matches your profile',
+    'Identity verification incomplete',
+    'Registered appearance differs from current form',
+  ]),
+});
 
 export type EmployeeFileId =
   | 'carter'
@@ -115,6 +139,12 @@ interface EmployeeFileDefinition {
   readonly behavioralHabits: readonly string[];
 }
 
+interface EmployeeFilePortraitFraming {
+  readonly scale: number;
+  readonly offsetX: number;
+  readonly offsetY: number;
+}
+
 interface EmployeeFileFallbackEntry {
   readonly department: string;
   readonly departmentPhone: string;
@@ -125,6 +155,27 @@ interface EmployeeFileFallbackEntry {
   readonly habits: string;
   readonly portraitFrame: SpriteFrame | null;
 }
+
+const EMPLOYEE_FILE_PORTRAIT_FRAMING: Readonly<
+  Partial<Record<EmployeeFileId, EmployeeFilePortraitFraming>>
+> = (() => {
+  const presentation = EMPLOYEE_PROFILES.jake.windowPortraitPresentation;
+  if (!presentation) {
+    return {};
+  }
+  const scale = Number.isFinite(presentation.scale) && (presentation.scale ?? 0) > 0 ? presentation.scale! : 1;
+  const offsetX = Number.isFinite(presentation.offsetX) ? presentation.offsetX! : 0;
+  const offsetY = Number.isFinite(presentation.offsetY) ? presentation.offsetY! : 0;
+  const fileScale = scale * 1.12;
+  const fileOffsetY = offsetY - 40;
+  return {
+    jake: {
+      scale: fileScale,
+      offsetX,
+      offsetY: fileOffsetY,
+    },
+  };
+})();
 
 @ccclass('EmployeeFilesController')
 export class EmployeeFilesController extends Component {
@@ -204,6 +255,9 @@ export class EmployeeFilesController extends Component {
   private fileStatusNode: Node | null = null;
   private portraitBaseWidth = 0;
   private portraitBaseHeight = 0;
+  private readonly portraitBasePosition = new Vec3();
+  private readonly portraitBaseScale = new Vec3(1, 1, 1);
+  private hasPortraitBaseTransform = false;
   private carterPortraitFrame: SpriteFrame | null = null;
   private ethanPortraitFrame: SpriteFrame | null = null;
   private samPortraitFrame: SpriteFrame | null = null;
@@ -213,6 +267,7 @@ export class EmployeeFilesController extends Component {
   private claraPortraitFrame: SpriteFrame | null = null;
   private gracePortraitFrame: SpriteFrame | null = null;
   private mayaPortraitFrame: SpriteFrame | null = null;
+  private playerTrueIdentityPortraitFrame: SpriteFrame | null = null;
   private samPortraitLoading = false;
   private markPortraitLoading = false;
   private jakePortraitLoading = false;
@@ -220,8 +275,34 @@ export class EmployeeFilesController extends Component {
   private claraPortraitLoading = false;
   private gracePortraitLoading = false;
   private mayaPortraitLoading = false;
+  private playerTrueIdentityPortraitLoading = false;
   private activeEmployeeFileDrawerIndex = -1;
   private activeEmployeeFileTabIndex = 0;
+  private day0EndingArchiveRevealModeActive = false;
+  private day0EndingArchiveRevealProfileId: EmployeeFileId = 'ethan';
+  private day0EndingArchiveRevealDetailClosedCallback: (() => void) | null = null;
+  private deskEvidenceRuntime: Node | null = null;
+  private outsideCloseHitRuntime: Node | null = null;
+
+  private static readonly EXTERNAL_INTERACTION_ALLOWED_WHEN_DRAWER_OPEN = new Set<string>([
+    'TelephoneHit',
+    'AppointmentRosterHit',
+  ]);
+  private static readonly OUTSIDE_CLOSE_BLOCK_TARGET_NAMES = new Set<string>([
+    'TelephoneHit',
+    'AppointmentRosterHit',
+    'EmployeeCardHit',
+    'ApplicationFormHit',
+    'ScreeningChecklistHit',
+    'EmployeeDrawer01Hit',
+    'EmployeeDrawer02Hit',
+    'EmployeeDrawer03Hit',
+    'BtnAllowHit',
+    'BtnDenyHit',
+    'ui_btn_help',
+    'ui_btn_hint',
+  ]);
+  private static readonly OUTSIDE_CLOSE_HIT_NODE_NAME = 'EmployeeDrawerOutsideCloseHitRuntime';
 
   onLoad(): void {
     if (this.node.name !== 'EmployeeDrawersClosedRuntime') {
@@ -278,6 +359,11 @@ export class EmployeeFilesController extends Component {
     this.fileDetailContent = null;
     this.detailPanel = null;
     this.openRuntime = null;
+    if (this.outsideCloseHitRuntime && isValid(this.outsideCloseHitRuntime, true)) {
+      this.outsideCloseHitRuntime.removeFromParent();
+    }
+    this.outsideCloseHitRuntime = null;
+    this.deskEvidenceRuntime = null;
     this.samPortraitFrame = null;
     this.markPortraitFrame = null;
     this.jakePortraitFrame = null;
@@ -285,6 +371,7 @@ export class EmployeeFilesController extends Component {
     this.claraPortraitFrame = null;
     this.gracePortraitFrame = null;
     this.mayaPortraitFrame = null;
+    this.playerTrueIdentityPortraitFrame = null;
     this.samPortraitLoading = false;
     this.markPortraitLoading = false;
     this.jakePortraitLoading = false;
@@ -292,9 +379,150 @@ export class EmployeeFilesController extends Component {
     this.claraPortraitLoading = false;
     this.gracePortraitLoading = false;
     this.mayaPortraitLoading = false;
+    this.playerTrueIdentityPortraitLoading = false;
+    this.day0EndingArchiveRevealDetailClosedCallback = null;
   }
 
   public setActiveInspectionSubject(_subjectId: InspectionSubjectId): void {}
+
+  public setDay0EndingArchiveRevealDetailClosedCallback(callback: (() => void) | null): void {
+    this.day0EndingArchiveRevealDetailClosedCallback = callback;
+  }
+
+  public enterDay0EndingArchiveRevealMode(profileId: EmployeeFileId = 'ethan'): boolean {
+    if (!this.ready || this.isAnimating || this.isDestroying || !this.isControllerAlive()) {
+      return false;
+    }
+    this.resolvePortraitSourcesIfNeeded();
+    AudioManager.getInstance()?.playCachedDrawerMove();
+    this.day0EndingArchiveRevealModeActive = true;
+    this.day0EndingArchiveRevealProfileId = profileId;
+    this.forceCloseDetailVisibility();
+    this.currentOpenIndex = -1;
+    this.isAnimating = false;
+    this.setOutsideCloseHitActive(false);
+    this.activeEmployeeFileDrawerIndex = -1;
+    this.activeEmployeeFileTabIndex = 0;
+    this.restoreBaseButtonStates();
+    this.setDrawerButtonsInteractable(true);
+
+    for (let index = 0; index < this.drawerVisuals.length; index += 1) {
+      if (!this.isNodeAlive(this.drawerVisuals[index]) || !this.isNodeAlive(this.drawerHits[index])) {
+        continue;
+      }
+      this.openVisuals[index].active = true;
+      this.fileHits[index].active = true;
+      this.drawerVisuals[index].setPosition(this.openedPositions[index]);
+      this.drawerHits[index].setPosition(this.openedPositions[index]);
+      const drawerButton = this.drawerButtons[index];
+      if (drawerButton && isValid(drawerButton, true)) {
+        drawerButton.interactable = false;
+        drawerButton.enabled = false;
+      }
+      const fileButton = this.fileButtons[index];
+      if (fileButton && isValid(fileButton, true)) {
+        fileButton.interactable = this.hasDrawerFileDetail(index);
+        fileButton.enabled = this.hasDrawerFileDetail(index);
+      }
+    }
+    return true;
+  }
+
+  public exitDay0EndingArchiveRevealMode(): void {
+    if (this.isDestroying || !this.node || !this.node.isValid) {
+      return;
+    }
+    this.day0EndingArchiveRevealModeActive = false;
+    this.day0EndingArchiveRevealProfileId = 'ethan';
+    this.enforceInitialState();
+    this.restoreBaseButtonStates();
+  }
+
+  public closeOpenDrawerForExternalInteraction(onClosed?: () => void): boolean {
+    if (!this.ready || this.isAnimating || this.isDestroying || this.isDetailOpen) {
+      return false;
+    }
+    const openIndex = this.currentOpenIndex;
+    if (openIndex < 0) {
+      return false;
+    }
+    this.closeDrawer(openIndex, () => {
+      if (!this.isControllerAlive()) {
+        return;
+      }
+      this.restoreBaseButtonStates();
+      onClosed?.();
+    });
+    return true;
+  }
+
+  private readonly handleDeskEvidenceTouchEnd = (event: EventTouch): void => {
+    if (!this.ready || this.isDestroying || this.currentOpenIndex < 0 || this.isAnimating || this.isDetailOpen) {
+      return;
+    }
+    if (!this.deskEvidenceRuntime || !this.isNodeAlive(this.deskEvidenceRuntime)) {
+      return;
+    }
+    const target = event.target as Node | null;
+    if (!target || !this.isNodeAlive(target)) {
+      return;
+    }
+    if (this.isOutsideCloseBlockedTarget(target)) {
+      return;
+    }
+    this.closeOpenDrawerForExternalInteraction();
+  };
+
+  private readonly handleOutsideCloseHitTouchEnd = (_event: EventTouch): void => {
+    if (!this.ready || this.isDestroying || this.currentOpenIndex < 0 || this.isAnimating || this.isDetailOpen) {
+      return;
+    }
+    this.closeOpenDrawerForExternalInteraction();
+  };
+
+  private isOutsideCloseBlockedTarget(target: Node): boolean {
+    let cursor: Node | null = target;
+    while (cursor && this.isNodeAlive(cursor)) {
+      if (EmployeeFilesController.OUTSIDE_CLOSE_BLOCK_TARGET_NAMES.has(cursor.name)) {
+        return true;
+      }
+      cursor = cursor.parent;
+    }
+    return false;
+  }
+
+  private createOutsideCloseHitRuntime(): void {
+    if (!this.deskEvidenceRuntime || !this.isNodeAlive(this.deskEvidenceRuntime)) {
+      this.outsideCloseHitRuntime = null;
+      return;
+    }
+    let runtime = this.deskEvidenceRuntime.getChildByName(
+      EmployeeFilesController.OUTSIDE_CLOSE_HIT_NODE_NAME,
+    );
+    if (!runtime || !this.isNodeAlive(runtime)) {
+      runtime = new Node(EmployeeFilesController.OUTSIDE_CLOSE_HIT_NODE_NAME);
+      runtime.layer = this.deskEvidenceRuntime.layer;
+      this.deskEvidenceRuntime.insertChild(runtime, 0);
+    }
+    runtime.setSiblingIndex(0);
+    runtime.setPosition(0, 0, 0);
+    const runtimeTransform = runtime.getComponent(UITransform) ?? runtime.addComponent(UITransform);
+    runtimeTransform.setAnchorPoint(0.5, 0.5);
+    const drawerTransform = this.node.getComponent(UITransform);
+    const deskTransform = this.deskEvidenceRuntime.getComponent(UITransform);
+    const width = drawerTransform?.contentSize.width ?? deskTransform?.contentSize.width ?? 720;
+    const height = drawerTransform?.contentSize.height ?? deskTransform?.contentSize.height ?? 1280;
+    runtimeTransform.setContentSize(width, height);
+    runtime.active = false;
+    this.outsideCloseHitRuntime = runtime;
+  }
+
+  private setOutsideCloseHitActive(active: boolean): void {
+    if (!this.outsideCloseHitRuntime || !this.isNodeAlive(this.outsideCloseHitRuntime)) {
+      return;
+    }
+    this.outsideCloseHitRuntime.active = active;
+  }
 
   private resolveNodes(): boolean {
     this.openRuntime = this.node.getChildByName('EmployeeDrawersOpenRuntime');
@@ -377,6 +605,8 @@ export class EmployeeFilesController extends Component {
       this.fail('Missing node: DeskEvidenceRuntime');
       return false;
     }
+    this.deskEvidenceRuntime = deskEvidenceRuntime;
+    this.createOutsideCloseHitRuntime();
 
     const canvas = deskEvidenceRuntime.parent;
     if (!canvas || canvas.name !== 'Canvas') {
@@ -444,6 +674,13 @@ export class EmployeeFilesController extends Component {
     if (portraitTransform) {
       this.portraitBaseWidth = portraitTransform.contentSize.width;
       this.portraitBaseHeight = portraitTransform.contentSize.height;
+    }
+    this.ensurePortraitMaskContainer();
+    const portraitNode = this.filePortraitSprite?.node ?? null;
+    if (portraitNode && isValid(portraitNode, true)) {
+      this.portraitBasePosition.set(portraitNode.position.x, portraitNode.position.y, portraitNode.position.z);
+      this.portraitBaseScale.set(portraitNode.scale.x, portraitNode.scale.y, portraitNode.scale.z);
+      this.hasPortraitBaseTransform = true;
     }
 
     this.detailCloseHit = this.detailPanel.getChildByName('EmployeeFileDetailCloseHit');
@@ -579,6 +816,7 @@ export class EmployeeFilesController extends Component {
         return false;
       }
       this.baseButtonStates.push({
+        nodeName: name,
         button,
         enabled: button.enabled,
         interactable: button.interactable,
@@ -594,6 +832,7 @@ export class EmployeeFilesController extends Component {
     this.activeEmployeeFileDrawerIndex = -1;
     this.activeEmployeeFileTabIndex = 0;
     this.forceCloseDetailVisibility();
+    this.setOutsideCloseHitActive(false);
     this.setDetailTabInteractable([false, false, false, false]);
 
     for (let index = 0; index < this.drawerVisuals.length; index += 1) {
@@ -620,6 +859,10 @@ export class EmployeeFilesController extends Component {
       this.detailCloseButton.interactable = interactable;
     }
     if (!interactable) {
+      this.setDetailTabInteractable([false, false, false, false]);
+      return;
+    }
+    if (this.day0EndingArchiveRevealModeActive) {
       this.setDetailTabInteractable([false, false, false, false]);
       return;
     }
@@ -726,6 +969,12 @@ export class EmployeeFilesController extends Component {
         callback: this.detailCloseHandler,
       };
     }
+    if (this.deskEvidenceRuntime && isValid(this.deskEvidenceRuntime, true)) {
+      this.deskEvidenceRuntime.on(Node.EventType.TOUCH_END, this.handleDeskEvidenceTouchEnd, this);
+    }
+    if (this.outsideCloseHitRuntime && isValid(this.outsideCloseHitRuntime, true)) {
+      this.outsideCloseHitRuntime.on(Node.EventType.TOUCH_END, this.handleOutsideCloseHitTouchEnd, this);
+    }
   }
 
   private unregisterEvents(): void {
@@ -778,10 +1027,20 @@ export class EmployeeFilesController extends Component {
     }
     this.registeredDetailCloseHandler = null;
     this.detailCloseHandler = null;
+    if (this.deskEvidenceRuntime && isValid(this.deskEvidenceRuntime, true)) {
+      this.deskEvidenceRuntime.off(Node.EventType.TOUCH_END, this.handleDeskEvidenceTouchEnd, this);
+    }
+    if (this.outsideCloseHitRuntime && isValid(this.outsideCloseHitRuntime, true)) {
+      this.outsideCloseHitRuntime.off(Node.EventType.TOUCH_END, this.handleOutsideCloseHitTouchEnd, this);
+    }
   }
 
   private handleDrawerClick(index: number): void {
     if (!this.ready || this.isAnimating || this.isDetailOpen) {
+      return;
+    }
+    if (this.day0EndingArchiveRevealModeActive) {
+      // In Day0 ending reveal, only exposed file hits should open detail.
       return;
     }
 
@@ -807,6 +1066,7 @@ export class EmployeeFilesController extends Component {
 
     this.isAnimating = true;
     this.currentOpenIndex = index;
+    this.setOutsideCloseHitActive(true);
     this.openVisuals[index].active = true;
     this.setBaseButtonsInteractable(false);
 
@@ -861,6 +1121,9 @@ export class EmployeeFilesController extends Component {
         if (this.currentOpenIndex === index) {
           this.currentOpenIndex = -1;
         }
+        if (this.currentOpenIndex === -1) {
+          this.setOutsideCloseHitActive(false);
+        }
         this.isAnimating = false;
         if (onComplete) {
           onComplete();
@@ -885,6 +1148,10 @@ export class EmployeeFilesController extends Component {
 
   private handleFileClick(index: number): void {
     if (!this.ready || this.isAnimating || this.isDetailOpen) {
+      return;
+    }
+    if (this.day0EndingArchiveRevealModeActive) {
+      this.openDay0EndingArchiveRevealProfile(index);
       return;
     }
 
@@ -954,6 +1221,67 @@ export class EmployeeFilesController extends Component {
       return;
     }
     this.isDetailOpen = true;
+  }
+
+  private openDay0EndingArchiveRevealProfile(index: number): void {
+    if (
+      !this.ready ||
+      this.isAnimating ||
+      this.isDetailOpen ||
+      !this.detailPanel ||
+      !this.fileDetailContent ||
+      this.isDestroying ||
+      !this.isControllerAlive() ||
+      !this.isNodeAlive(this.detailPanel) ||
+      !this.isNodeAlive(this.fileDetailContent)
+    ) {
+      return;
+    }
+
+    const revealDefinition = this.getDay0EndingArchiveRevealDefinition();
+    if (!revealDefinition) {
+      return;
+    }
+
+    AudioManager.getInstance()?.playCachedDocumentFlip();
+    this.activeEmployeeFileDrawerIndex = index;
+    this.activeEmployeeFileTabIndex = 0;
+    this.currentOpenIndex = index;
+    this.setDetailTabInteractable([false, false, false, false]);
+    this.setDrawerButtonsInteractable(false);
+    this.setFileDetailContentVisible(true);
+
+    showInteractivePanel(this.detailPanel, {
+      setInteractable: (interactable) => this.setDetailPanelInteractable(interactable),
+    });
+
+    if (!this.applyEmployeeFileDefinition(revealDefinition)) {
+      this.setFileDetailContentVisible(false);
+      hideInteractivePanelImmediate(this.detailPanel, {
+        setInteractable: (interactable) => this.setDetailPanelInteractable(interactable),
+      });
+      this.setDrawerButtonsInteractable(true);
+      return;
+    }
+    this.isDetailOpen = true;
+  }
+
+  private getDay0EndingArchiveRevealDefinition(): EmployeeFileDefinition | null {
+    this.resolvePortraitSourcesIfNeeded();
+    if (this.day0EndingArchiveRevealProfileId === 'ethan' && this.playerTrueIdentityPortraitFrame) {
+      return {
+        id: 'ethan',
+        department: DAY0_ENDING_PLAYER_PROFILE.department,
+        departmentPhone: 'UNKNOWN',
+        displayName: DAY0_ENDING_PLAYER_PROFILE.name,
+        employeeId: DAY0_ENDING_PLAYER_PROFILE.employeeId,
+        position: DAY0_ENDING_PLAYER_PROFILE.position,
+        portraitFrame: this.playerTrueIdentityPortraitFrame,
+        appearanceFeatures: DAY0_ENDING_PLAYER_PROFILE.appearanceFeatures,
+        behavioralHabits: [],
+      };
+    }
+    return null;
   }
 
   private applyEmployeeFileEntry(drawerIndex: number, tabIndex: number): boolean {
@@ -1163,6 +1491,7 @@ export class EmployeeFilesController extends Component {
     if (this.filePortraitSprite) {
       this.filePortraitSprite.spriteFrame = definition.portraitFrame;
       this.applyPortraitContainSize(definition.portraitFrame);
+      this.applyPortraitFraming(definition.id);
     }
     const hasBehavioralHabits = definition.behavioralHabits.length > 0;
     if (this.fileHabitsTitleNode && isValid(this.fileHabitsTitleNode, true)) {
@@ -1211,6 +1540,7 @@ export class EmployeeFilesController extends Component {
     if (this.filePortraitSprite) {
       this.filePortraitSprite.spriteFrame = entry.portraitFrame;
       this.applyPortraitContainSize(entry.portraitFrame);
+      this.applyPortraitFraming(null);
     }
     this.applyStatusVisibilityPolicy();
     return true;
@@ -1234,6 +1564,7 @@ export class EmployeeFilesController extends Component {
     this.loadClaraPortraitIfNeeded();
     this.loadGracePortraitIfNeeded();
     this.loadMayaPortraitIfNeeded();
+    this.loadPlayerTrueIdentityPortraitIfNeeded();
   }
 
   private loadSamPortraitIfNeeded(): void {
@@ -1418,6 +1749,34 @@ export class EmployeeFilesController extends Component {
     });
   }
 
+  private loadPlayerTrueIdentityPortraitIfNeeded(): void {
+    if (this.playerTrueIdentityPortraitFrame || this.playerTrueIdentityPortraitLoading) {
+      return;
+    }
+    this.playerTrueIdentityPortraitLoading = true;
+    assetManager.loadAny(PLAYER_TRUE_IDENTITY_PORTRAIT_SPRITEFRAME_UUID, (error, asset) => {
+      this.playerTrueIdentityPortraitLoading = false;
+      if (error) {
+        console.warn(
+          '[EmployeeFilesController] Failed to load Day0 ending player true identity portrait sprite frame.',
+          error,
+        );
+        return;
+      }
+      const frame = asset as SpriteFrame | null;
+      if (!frame) {
+        return;
+      }
+      this.playerTrueIdentityPortraitFrame = frame;
+      if (this.isDetailOpen && this.day0EndingArchiveRevealModeActive) {
+        const revealDefinition = this.getDay0EndingArchiveRevealDefinition();
+        if (revealDefinition) {
+          this.applyEmployeeFileDefinition(revealDefinition);
+        }
+      }
+    });
+  }
+
   private formatFeatureList(items: readonly string[]): string {
     if (items.length === 0) {
       return '';
@@ -1456,6 +1815,79 @@ export class EmployeeFilesController extends Component {
     portraitTransform.setContentSize(sourceWidth * scale, sourceHeight * scale);
   }
 
+  private ensurePortraitMaskContainer(): void {
+    if (!this.filePortraitSprite || !isValid(this.filePortraitSprite.node, true)) {
+      return;
+    }
+    const portraitNode = this.filePortraitSprite.node;
+    const portraitParent = portraitNode.parent;
+    if (!portraitParent || !isValid(portraitParent, true)) {
+      return;
+    }
+    if (portraitParent.getComponent(Mask)) {
+      portraitParent.active = true;
+      return;
+    }
+    const portraitTransform = portraitNode.getComponent(UITransform);
+    const maskWidth =
+      this.portraitBaseWidth > 0 ? this.portraitBaseWidth : portraitTransform?.contentSize.width ?? 0;
+    const maskHeight =
+      this.portraitBaseHeight > 0 ? this.portraitBaseHeight : portraitTransform?.contentSize.height ?? 0;
+    if (maskWidth <= 0 || maskHeight <= 0) {
+      return;
+    }
+
+    const originalPosition = portraitNode.position.clone();
+    const originalScale = portraitNode.scale.clone();
+    const siblingIndex = portraitNode.getSiblingIndex();
+
+    const maskNode = new Node('FilePortraitMaskRuntime');
+    maskNode.layer = portraitNode.layer;
+    portraitParent.insertChild(maskNode, siblingIndex);
+    maskNode.setPosition(originalPosition.x, originalPosition.y, originalPosition.z);
+    maskNode.setScale(1, 1, 1);
+    maskNode.setRotationFromEuler(0, 0, 0);
+    maskNode.active = true;
+
+    const maskTransform = maskNode.addComponent(UITransform);
+    maskTransform.setAnchorPoint(0.5, 0.5);
+    maskTransform.setContentSize(maskWidth, maskHeight);
+
+    const mask = maskNode.addComponent(Mask);
+    mask.type = Mask.Type.RECT;
+
+    portraitNode.removeFromParent();
+    maskNode.addChild(portraitNode);
+    portraitNode.setPosition(0, 0, 0);
+    portraitNode.setScale(originalScale.x, originalScale.y, originalScale.z);
+    portraitNode.setRotationFromEuler(0, 0, 0);
+  }
+
+  private applyPortraitFraming(fileId: EmployeeFileId | null): void {
+    if (!this.filePortraitSprite || !isValid(this.filePortraitSprite.node, true)) {
+      return;
+    }
+    const portraitNode = this.filePortraitSprite.node;
+    const basePosition = this.hasPortraitBaseTransform ? this.portraitBasePosition : portraitNode.position;
+    const baseScale = this.hasPortraitBaseTransform ? this.portraitBaseScale : new Vec3(1, 1, 1);
+
+    portraitNode.setPosition(basePosition.x, basePosition.y, basePosition.z);
+    portraitNode.setScale(baseScale.x, baseScale.y, baseScale.z);
+
+    if (!fileId) {
+      return;
+    }
+    const framing = EMPLOYEE_FILE_PORTRAIT_FRAMING[fileId];
+    if (!framing) {
+      return;
+    }
+    const uniformScale = Number.isFinite(framing.scale) && framing.scale > 0 ? framing.scale : 1;
+    const offsetX = Number.isFinite(framing.offsetX) ? framing.offsetX : 0;
+    const offsetY = Number.isFinite(framing.offsetY) ? framing.offsetY : 0;
+    portraitNode.setScale(baseScale.x * uniformScale, baseScale.y * uniformScale, baseScale.z);
+    portraitNode.setPosition(basePosition.x + offsetX, basePosition.y + offsetY, basePosition.z);
+  }
+
   private closeFileDetail(): void {
     if (
       !this.ready ||
@@ -1482,6 +1914,16 @@ export class EmployeeFilesController extends Component {
         this.activeEmployeeFileTabIndex = 0;
         this.setDetailTabInteractable([false, false, false, false]);
         this.setDrawerButtonsInteractable(true);
+        if (this.day0EndingArchiveRevealModeActive) {
+          this.currentOpenIndex = -1;
+          for (const fileHit of this.fileHits) {
+            if (this.isNodeAlive(fileHit)) {
+              fileHit.active = false;
+            }
+          }
+          this.day0EndingArchiveRevealDetailClosedCallback?.();
+          return;
+        }
 
         if (this.currentOpenIndex >= 0 && this.isNodeAlive(this.fileHits[this.currentOpenIndex])) {
           this.fileHits[this.currentOpenIndex].active = true;
@@ -1501,6 +1943,9 @@ export class EmployeeFilesController extends Component {
 
     for (const state of this.baseButtonStates) {
       if (isValid(state.button, true) && isValid(state.button.node, true)) {
+        if (EmployeeFilesController.EXTERNAL_INTERACTION_ALLOWED_WHEN_DRAWER_OPEN.has(state.nodeName)) {
+          continue;
+        }
         state.button.interactable = false;
       }
     }
@@ -1523,6 +1968,9 @@ export class EmployeeFilesController extends Component {
   }
 
   private setDetailTabInteractable(states: readonly boolean[]): void {
+    if (!Array.isArray(this.detailTabButtons)) {
+      return;
+    }
     for (let index = 0; index < this.detailTabButtons.length; index += 1) {
       const button = this.detailTabButtons[index];
       if (isValid(button, true) && isValid(button.node, true)) {

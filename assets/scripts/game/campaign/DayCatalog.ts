@@ -19,6 +19,56 @@ const EXPECTED_CAMPAIGN_DATES = [
 const DATE_TEXT_RE = /^\d{4}-\d{2}-\d{2}$/;
 const FULL_CHECKLIST_SET: readonly CampaignChecklistCategory[] = ['id-card', 'application', 'appearance'];
 
+export interface MonsterThreatTimingConfig {
+  readonly openWindowBreakSeconds: number;
+  readonly closedShutterBreakSeconds: number;
+  readonly phoneDialSeconds: number;
+}
+
+type MonsterThreatTimingDay = 1 | 2 | 3 | 4;
+
+const MONSTER_THREAT_TIMING_BY_DAY: Readonly<Record<MonsterThreatTimingDay, MonsterThreatTimingConfig>> =
+  Object.freeze({
+    1: Object.freeze({
+      openWindowBreakSeconds: 6.0,
+      closedShutterBreakSeconds: 10.0,
+      phoneDialSeconds: 10.0,
+    }),
+    2: Object.freeze({
+      openWindowBreakSeconds: 5.5,
+      closedShutterBreakSeconds: 9.0,
+      phoneDialSeconds: 9.0,
+    }),
+    3: Object.freeze({
+      openWindowBreakSeconds: 5.0,
+      closedShutterBreakSeconds: 8.0,
+      phoneDialSeconds: 8.0,
+    }),
+    4: Object.freeze({
+      openWindowBreakSeconds: 4.5,
+      closedShutterBreakSeconds: 7.0,
+      phoneDialSeconds: 7.0,
+    }),
+  });
+
+function clampMonsterThreatTimingDay(day: number): MonsterThreatTimingDay {
+  if (!Number.isFinite(day)) {
+    return 1;
+  }
+  const normalized = Math.floor(day);
+  if (normalized <= 1) {
+    return 1;
+  }
+  if (normalized >= 4) {
+    return 4;
+  }
+  return normalized as 2 | 3;
+}
+
+export function getMonsterThreatTimingForDay(day: number): MonsterThreatTimingConfig {
+  return MONSTER_THREAT_TIMING_BY_DAY[clampMonsterThreatTimingDay(day)];
+}
+
 function freezeRoundSpec(spec: CampaignRoundSpec): CampaignRoundSpec {
   if (spec.mode === 'legacy-random') {
     return Object.freeze({
@@ -89,6 +139,34 @@ function createEmptyRequiredQuotas(): readonly DayRequiredCaseQuota[] {
 function createDay1RequiredQuotas(): readonly DayRequiredCaseQuota[] {
   return freezeRequiredQuotas([
     {
+      quotaId: 'day1-valid-human-01',
+      count: 1,
+      spec: {
+        specId: 'day1-valid-human-01',
+        mode: 'employee-constraint',
+        caseKind: 'VALID_HUMAN',
+        truth: {
+          idCardPass: true,
+          applicationPass: true,
+          appearancePass: true,
+        },
+      },
+    },
+    {
+      quotaId: 'day1-valid-human-02',
+      count: 1,
+      spec: {
+        specId: 'day1-valid-human-02',
+        mode: 'employee-constraint',
+        caseKind: 'VALID_HUMAN',
+        truth: {
+          idCardPass: true,
+          applicationPass: true,
+          appearancePass: true,
+        },
+      },
+    },
+    {
       quotaId: 'day1-obvious-monster-01',
       count: 1,
       spec: {
@@ -101,26 +179,16 @@ function createDay1RequiredQuotas(): readonly DayRequiredCaseQuota[] {
       },
     },
     {
-      quotaId: 'day1-obvious-monster-02',
+      quotaId: 'day1-valid-human-03',
       count: 1,
       spec: {
-        specId: 'day1-obvious-monster-02',
+        specId: 'day1-valid-human-03',
         mode: 'employee-constraint',
-        caseKind: 'DISGUISED_MONSTER',
+        caseKind: 'VALID_HUMAN',
         truth: {
-          appearancePass: false,
-        },
-      },
-    },
-    {
-      quotaId: 'day1-obvious-monster-03',
-      count: 1,
-      spec: {
-        specId: 'day1-obvious-monster-03',
-        mode: 'employee-constraint',
-        caseKind: 'DISGUISED_MONSTER',
-        truth: {
-          appearancePass: false,
+          idCardPass: true,
+          applicationPass: true,
+          appearancePass: true,
         },
       },
     },
@@ -142,14 +210,16 @@ function createDay2RequiredQuotas(): readonly DayRequiredCaseQuota[] {
       },
     },
     {
-      quotaId: 'day2-obvious-monster-02',
+      quotaId: 'day2-valid-human-02',
       count: 1,
       spec: {
-        specId: 'day2-obvious-monster-02',
+        specId: 'day2-valid-human-02',
         mode: 'employee-constraint',
-        caseKind: 'DISGUISED_MONSTER',
+        caseKind: 'VALID_HUMAN',
         truth: {
-          appearancePass: false,
+          idCardPass: true,
+          applicationPass: true,
+          appearancePass: true,
         },
       },
     },
@@ -172,6 +242,20 @@ function createDay2RequiredQuotas(): readonly DayRequiredCaseQuota[] {
       count: 1,
       spec: {
         specId: 'day2-valid-human-01',
+        mode: 'employee-constraint',
+        caseKind: 'VALID_HUMAN',
+        truth: {
+          idCardPass: true,
+          applicationPass: true,
+          appearancePass: true,
+        },
+      },
+    },
+    {
+      quotaId: 'day2-valid-human-03',
+      count: 1,
+      spec: {
+        specId: 'day2-valid-human-03',
         mode: 'employee-constraint',
         caseKind: 'VALID_HUMAN',
         truth: {
@@ -240,6 +324,208 @@ function createDay3RequiredQuotas(): readonly DayRequiredCaseQuota[] {
         },
       },
     },
+    {
+      quotaId: 'day3-valid-human-02',
+      count: 1,
+      spec: {
+        specId: 'day3-valid-human-02',
+        mode: 'employee-constraint',
+        caseKind: 'VALID_HUMAN',
+        truth: {
+          idCardPass: true,
+          applicationPass: true,
+          appearancePass: true,
+        },
+      },
+    },
+  ]);
+}
+
+function createDay5RequiredQuotas(): readonly DayRequiredCaseQuota[] {
+  return freezeRequiredQuotas([
+    {
+      quotaId: 'day5-valid-human-01',
+      count: 1,
+      spec: {
+        specId: 'day5-valid-human-01',
+        mode: 'employee-constraint',
+        caseKind: 'VALID_HUMAN',
+        truth: {
+          idCardPass: true,
+          applicationPass: true,
+          appearancePass: true,
+        },
+      },
+    },
+    {
+      quotaId: 'day5-card-fail-human-01',
+      count: 1,
+      spec: {
+        specId: 'day5-card-fail-human-01',
+        mode: 'employee-constraint',
+        caseKind: 'INVALID_HUMAN',
+        truth: {
+          idCardPass: false,
+          applicationPass: true,
+          appearancePass: true,
+        },
+      },
+    },
+    {
+      quotaId: 'day5-application-fail-human-01',
+      count: 1,
+      spec: {
+        specId: 'day5-application-fail-human-01',
+        mode: 'employee-constraint',
+        caseKind: 'INVALID_HUMAN',
+        truth: {
+          idCardPass: true,
+          applicationPass: false,
+          appearancePass: true,
+        },
+      },
+    },
+    {
+      quotaId: 'day5-obvious-monster-01',
+      count: 1,
+      spec: {
+        specId: 'day5-obvious-monster-01',
+        mode: 'employee-constraint',
+        caseKind: 'DISGUISED_MONSTER',
+        truth: {
+          appearancePass: false,
+        },
+      },
+    },
+    {
+      quotaId: 'day5-obvious-monster-02',
+      count: 1,
+      spec: {
+        specId: 'day5-obvious-monster-02',
+        mode: 'employee-constraint',
+        caseKind: 'DISGUISED_MONSTER',
+        truth: {
+          appearancePass: false,
+        },
+      },
+    },
+    {
+      quotaId: 'day5-valid-human-02',
+      count: 1,
+      spec: {
+        specId: 'day5-valid-human-02',
+        mode: 'employee-constraint',
+        caseKind: 'VALID_HUMAN',
+        truth: {
+          idCardPass: true,
+          applicationPass: true,
+          appearancePass: true,
+        },
+      },
+    },
+  ]);
+}
+
+function createDay6RequiredQuotas(): readonly DayRequiredCaseQuota[] {
+  return freezeRequiredQuotas([
+    {
+      quotaId: 'day6-valid-human-01',
+      count: 1,
+      spec: {
+        specId: 'day6-valid-human-01',
+        mode: 'employee-constraint',
+        caseKind: 'VALID_HUMAN',
+        truth: {
+          idCardPass: true,
+          applicationPass: true,
+          appearancePass: true,
+        },
+      },
+    },
+    {
+      quotaId: 'day6-card-fail-human-01',
+      count: 1,
+      spec: {
+        specId: 'day6-card-fail-human-01',
+        mode: 'employee-constraint',
+        caseKind: 'INVALID_HUMAN',
+        truth: {
+          idCardPass: false,
+          applicationPass: true,
+          appearancePass: true,
+        },
+      },
+    },
+    {
+      quotaId: 'day6-application-fail-human-01',
+      count: 1,
+      spec: {
+        specId: 'day6-application-fail-human-01',
+        mode: 'employee-constraint',
+        caseKind: 'INVALID_HUMAN',
+        truth: {
+          idCardPass: true,
+          applicationPass: false,
+          appearancePass: true,
+        },
+      },
+    },
+    {
+      quotaId: 'day6-disguised-monster-01',
+      count: 1,
+      spec: {
+        specId: 'day6-disguised-monster-01',
+        mode: 'employee-constraint',
+        caseKind: 'DISGUISED_MONSTER',
+        truth: {
+          idCardPass: true,
+          applicationPass: true,
+          appearancePass: false,
+        },
+      },
+    },
+    {
+      quotaId: 'day6-disguised-monster-02',
+      count: 1,
+      spec: {
+        specId: 'day6-disguised-monster-02',
+        mode: 'employee-constraint',
+        caseKind: 'DISGUISED_MONSTER',
+        truth: {
+          idCardPass: true,
+          applicationPass: true,
+          appearancePass: false,
+        },
+      },
+    },
+    {
+      quotaId: 'day6-card-fail-human-02',
+      count: 1,
+      spec: {
+        specId: 'day6-card-fail-human-02',
+        mode: 'employee-constraint',
+        caseKind: 'INVALID_HUMAN',
+        truth: {
+          idCardPass: false,
+          applicationPass: true,
+          appearancePass: true,
+        },
+      },
+    },
+    {
+      quotaId: 'day6-card-fail-human-03',
+      count: 1,
+      spec: {
+        specId: 'day6-card-fail-human-03',
+        mode: 'employee-constraint',
+        caseKind: 'INVALID_HUMAN',
+        truth: {
+          idCardPass: false,
+          applicationPass: true,
+          appearancePass: true,
+        },
+      },
+    },
   ]);
 }
 
@@ -251,8 +537,8 @@ function createDayCatalog(): readonly DayLevelConfig[] {
       shiftStartMinutes: 540,
       shiftEndMinutes: 1020,
       realDurationSeconds: 600,
-      encounterCountMin: 3,
-      encounterCountMax: 3,
+      encounterCountMin: 4,
+      encounterCountMax: 4,
       difficultyTier: 'tutorial-appearance',
       enabledEvidence: ['employee-files', 'checklist', 'appearance'],
       requiredChecklistCategories: ['appearance'],
@@ -267,8 +553,8 @@ function createDayCatalog(): readonly DayLevelConfig[] {
       shiftStartMinutes: 540,
       shiftEndMinutes: 1020,
       realDurationSeconds: 600,
-      encounterCountMin: 4,
-      encounterCountMax: 4,
+      encounterCountMin: 5,
+      encounterCountMax: 5,
       difficultyTier: 'tutorial-card',
       enabledEvidence: ['employee-files', 'employee-card', 'checklist', 'appearance'],
       requiredChecklistCategories: ['id-card', 'appearance'],
@@ -283,8 +569,8 @@ function createDayCatalog(): readonly DayLevelConfig[] {
       shiftStartMinutes: 540,
       shiftEndMinutes: 1020,
       realDurationSeconds: 600,
-      encounterCountMin: 4,
-      encounterCountMax: 4,
+      encounterCountMin: 5,
+      encounterCountMax: 5,
       difficultyTier: 'tutorial-application',
       enabledEvidence: ['employee-files', 'employee-card', 'application-form', 'checklist', 'appearance'],
       requiredChecklistCategories: ['id-card', 'application', 'appearance'],
@@ -299,8 +585,8 @@ function createDayCatalog(): readonly DayLevelConfig[] {
       shiftStartMinutes: 540,
       shiftEndMinutes: 1020,
       realDurationSeconds: 600,
-      encounterCountMin: 4,
-      encounterCountMax: 5,
+      encounterCountMin: 2,
+      encounterCountMax: 2,
       difficultyTier: 'visitor-introduction',
       enabledEvidence: [
         'employee-files',
@@ -323,8 +609,8 @@ function createDayCatalog(): readonly DayLevelConfig[] {
       shiftStartMinutes: 540,
       shiftEndMinutes: 1020,
       realDurationSeconds: 600,
-      encounterCountMin: 5,
-      encounterCountMax: 5,
+      encounterCountMin: 6,
+      encounterCountMax: 6,
       difficultyTier: 'subtle-errors',
       enabledEvidence: [
         'employee-files',
@@ -338,8 +624,8 @@ function createDayCatalog(): readonly DayLevelConfig[] {
       requiredChecklistCategories: ['id-card', 'application', 'appearance'],
       visitorSystemEnabled: true,
       departmentPhoneEnabled: true,
-      requiredCaseQuotas: createEmptyRequiredQuotas(),
-      optionalCasePool: createLegacyRandomOptionalPool(),
+      requiredCaseQuotas: createDay5RequiredQuotas(),
+      optionalCasePool: freezeOptionalPool([]),
     },
     {
       dayIndex: 6,
@@ -347,8 +633,8 @@ function createDayCatalog(): readonly DayLevelConfig[] {
       shiftStartMinutes: 540,
       shiftEndMinutes: 1020,
       realDurationSeconds: 600,
-      encounterCountMin: 5,
-      encounterCountMax: 6,
+      encounterCountMin: 7,
+      encounterCountMax: 7,
       difficultyTier: 'compound-errors',
       enabledEvidence: [
         'employee-files',
@@ -362,8 +648,8 @@ function createDayCatalog(): readonly DayLevelConfig[] {
       requiredChecklistCategories: ['id-card', 'application', 'appearance'],
       visitorSystemEnabled: true,
       departmentPhoneEnabled: true,
-      requiredCaseQuotas: createEmptyRequiredQuotas(),
-      optionalCasePool: createLegacyRandomOptionalPool(),
+      requiredCaseQuotas: createDay6RequiredQuotas(),
+      optionalCasePool: freezeOptionalPool([]),
     },
     {
       dayIndex: 7,
@@ -395,7 +681,7 @@ function createDayCatalog(): readonly DayLevelConfig[] {
 }
 
 export const CAMPAIGN_DAY_CONFIGS: readonly DayLevelConfig[] = createDayCatalog();
-export const HIGHEST_IMPLEMENTED_CAMPAIGN_DAY: CampaignDayIndex = 4;
+export const HIGHEST_IMPLEMENTED_CAMPAIGN_DAY: CampaignDayIndex = 6;
 
 export function isCampaignDayIndex(value: number): value is CampaignDayIndex {
   return Number.isInteger(value) && value >= 1 && value <= 7;
@@ -435,23 +721,23 @@ function ensureValidRoundSpec(dayIndex: number, field: string, spec: CampaignRou
 
 function ensurePlaceholderQueuePlan(config: DayLevelConfig): void {
   if (config.requiredCaseQuotas.length !== 0) {
-    throwDayConfigError(config.dayIndex, 'requiredCaseQuotas', 'Day 4-7 placeholder requires empty requiredCaseQuotas.');
+    throwDayConfigError(config.dayIndex, 'requiredCaseQuotas', 'Day 6-7 placeholder requires empty requiredCaseQuotas.');
   }
   if (config.optionalCasePool.length !== 1) {
-    throwDayConfigError(config.dayIndex, 'optionalCasePool', 'Day 4-7 placeholder requires exactly one optional entry.');
+    throwDayConfigError(config.dayIndex, 'optionalCasePool', 'Day 6-7 placeholder requires exactly one optional entry.');
   }
   const entry = config.optionalCasePool[0];
   if (entry.entryId !== 'legacy-random-fill') {
-    throwDayConfigError(config.dayIndex, 'optionalCasePool.entryId', 'Day 4-7 placeholder entryId must be legacy-random-fill.');
+    throwDayConfigError(config.dayIndex, 'optionalCasePool.entryId', 'Day 6-7 placeholder entryId must be legacy-random-fill.');
   }
   if (entry.weight !== 1) {
-    throwDayConfigError(config.dayIndex, 'optionalCasePool.weight', 'Day 4-7 placeholder weight must be 1.');
+    throwDayConfigError(config.dayIndex, 'optionalCasePool.weight', 'Day 6-7 placeholder weight must be 1.');
   }
   if (entry.spec.mode !== 'legacy-random' || entry.spec.specId !== 'legacy-random') {
     throwDayConfigError(
       config.dayIndex,
       'optionalCasePool.spec',
-      'Day 4-7 placeholder spec must be { specId: legacy-random, mode: legacy-random }.',
+      'Day 6-7 placeholder spec must be { specId: legacy-random, mode: legacy-random }.',
     );
   }
 }
@@ -507,7 +793,9 @@ function assertEmployeeConstraintQuota(
 }
 
 function assertDay1CampaignContract(config: DayLevelConfig): void {
-  expectDayTotalAndOptional(config, 3, 0);
+  expectDayTotalAndOptional(config, 4, 0);
+  let validHumanCount = 0;
+  let monsterCount = 0;
   for (const quota of config.requiredCaseQuotas) {
     if (quota.count !== 1) {
       throwDayQuotaError({
@@ -521,41 +809,53 @@ function assertDay1CampaignContract(config: DayLevelConfig): void {
     }
     assertEmployeeConstraintQuota(config, quota);
     const spec = quota.spec;
-    if (spec.caseKind !== 'DISGUISED_MONSTER') {
-      throwDayQuotaError({
-        dayIndex: config.dayIndex,
-        quotaId: quota.quotaId,
-        specId: spec.specId,
-        field: 'caseKind',
-        expected: 'DISGUISED_MONSTER',
-        actual: String(spec.caseKind ?? null),
-      });
+    const truth = spec.truth;
+    if (
+      spec.caseKind === 'VALID_HUMAN' &&
+      truth?.idCardPass === true &&
+      truth?.applicationPass === true &&
+      truth?.appearancePass === true
+    ) {
+      validHumanCount += 1;
+      continue;
     }
-    if (spec.truth?.appearancePass !== false) {
-      throwDayQuotaError({
-        dayIndex: config.dayIndex,
-        quotaId: quota.quotaId,
-        specId: spec.specId,
-        field: 'truth.appearancePass',
-        expected: 'false',
-        actual: String(spec.truth?.appearancePass),
-      });
+    if (spec.caseKind === 'DISGUISED_MONSTER' && truth?.appearancePass === false) {
+      if (truth.idCardPass !== undefined || truth.applicationPass !== undefined) {
+        throwDayQuotaError({
+          dayIndex: config.dayIndex,
+          quotaId: quota.quotaId,
+          specId: spec.specId,
+          field: 'truth.documentPass',
+          expected: 'undefined/undefined',
+          actual: `${String(truth.idCardPass)}/${String(truth.applicationPass)}`,
+        });
+      }
+      monsterCount += 1;
+      continue;
     }
-    if (spec.truth?.idCardPass !== undefined || spec.truth?.applicationPass !== undefined) {
-      throwDayQuotaError({
-        dayIndex: config.dayIndex,
-        quotaId: quota.quotaId,
-        specId: spec.specId,
-        field: 'truth.documentPass',
-        expected: 'undefined/undefined',
-        actual: `${String(spec.truth?.idCardPass)}/${String(spec.truth?.applicationPass)}`,
-      });
-    }
+    throwDayQuotaError({
+      dayIndex: config.dayIndex,
+      quotaId: quota.quotaId,
+      specId: spec.specId,
+      field: 'day1.casePattern',
+      expected: 'valid-human|monster',
+      actual: `caseKind=${String(spec.caseKind ?? null)} truth=${JSON.stringify(truth ?? null)}`,
+    });
+  }
+  if (validHumanCount !== 3 || monsterCount !== 1) {
+    throwDayQuotaError({
+      dayIndex: config.dayIndex,
+      quotaId: '-',
+      specId: '-',
+      field: 'day1.caseComposition',
+      expected: 'valid=3 monster=1',
+      actual: `valid=${validHumanCount} monster=${monsterCount}`,
+    });
   }
 }
 
 function assertDay2CampaignContract(config: DayLevelConfig): void {
-  expectDayTotalAndOptional(config, 4, 0);
+  expectDayTotalAndOptional(config, 5, 0);
   let monsterCount = 0;
   let cardInvalidCount = 0;
   let validHumanCount = 0;
@@ -614,20 +914,20 @@ function assertDay2CampaignContract(config: DayLevelConfig): void {
       actual: `caseKind=${String(spec.caseKind ?? null)} truth=${JSON.stringify(truth ?? null)}`,
     });
   }
-  if (monsterCount !== 2 || cardInvalidCount !== 1 || validHumanCount !== 1) {
+  if (monsterCount !== 1 || cardInvalidCount !== 1 || validHumanCount !== 3) {
     throwDayQuotaError({
       dayIndex: config.dayIndex,
       quotaId: '-',
       specId: '-',
       field: 'day2.caseComposition',
-      expected: 'monster=2 cardInvalid=1 valid=1',
+      expected: 'monster=1 cardInvalid=1 valid=3',
       actual: `monster=${monsterCount} cardInvalid=${cardInvalidCount} valid=${validHumanCount}`,
     });
   }
 }
 
 function assertDay3CampaignContract(config: DayLevelConfig): void {
-  expectDayTotalAndOptional(config, 4, 0);
+  expectDayTotalAndOptional(config, 5, 0);
   let monsterCount = 0;
   let validHumanCount = 0;
   let cardInvalidCount = 0;
@@ -698,7 +998,7 @@ function assertDay3CampaignContract(config: DayLevelConfig): void {
   }
   if (
     monsterCount !== 1 ||
-    validHumanCount !== 1 ||
+    validHumanCount !== 2 ||
     cardInvalidCount !== 1 ||
     applicationInvalidCount !== 1
   ) {
@@ -707,8 +1007,196 @@ function assertDay3CampaignContract(config: DayLevelConfig): void {
       quotaId: '-',
       specId: '-',
       field: 'day3.caseComposition',
-      expected: 'monster=1 valid=1 cardInvalid=1 applicationInvalid=1',
+      expected: 'monster=1 valid=2 cardInvalid=1 applicationInvalid=1',
       actual: `monster=${monsterCount} valid=${validHumanCount} cardInvalid=${cardInvalidCount} applicationInvalid=${applicationInvalidCount}`,
+    });
+  }
+}
+
+function assertDay5CampaignContract(config: DayLevelConfig): void {
+  expectDayTotalAndOptional(config, 6, 0);
+  let monsterCount = 0;
+  let validHumanCount = 0;
+  let cardInvalidCount = 0;
+  let applicationInvalidCount = 0;
+  for (const quota of config.requiredCaseQuotas) {
+    if (quota.count !== 1) {
+      throwDayQuotaError({
+        dayIndex: config.dayIndex,
+        quotaId: quota.quotaId,
+        specId: quota.spec.specId,
+        field: 'count',
+        expected: '1',
+        actual: String(quota.count),
+      });
+    }
+    assertEmployeeConstraintQuota(config, quota);
+    const spec = quota.spec;
+    const truth = spec.truth;
+    if (spec.caseKind === 'DISGUISED_MONSTER') {
+      if (truth?.appearancePass !== false) {
+        throwDayQuotaError({
+          dayIndex: config.dayIndex,
+          quotaId: quota.quotaId,
+          specId: spec.specId,
+          field: 'truth.appearancePass',
+          expected: 'false',
+          actual: String(truth?.appearancePass),
+        });
+      }
+      monsterCount += 1;
+      continue;
+    }
+    if (
+      spec.caseKind === 'VALID_HUMAN' &&
+      truth?.idCardPass === true &&
+      truth?.applicationPass === true &&
+      truth?.appearancePass === true
+    ) {
+      validHumanCount += 1;
+      continue;
+    }
+    if (
+      spec.caseKind === 'INVALID_HUMAN' &&
+      truth?.idCardPass === false &&
+      truth?.applicationPass === true &&
+      truth?.appearancePass === true
+    ) {
+      cardInvalidCount += 1;
+      continue;
+    }
+    if (
+      spec.caseKind === 'INVALID_HUMAN' &&
+      truth?.idCardPass === true &&
+      truth?.applicationPass === false &&
+      truth?.appearancePass === true
+    ) {
+      applicationInvalidCount += 1;
+      continue;
+    }
+    throwDayQuotaError({
+      dayIndex: config.dayIndex,
+      quotaId: quota.quotaId,
+      specId: spec.specId,
+      field: 'day5.casePattern',
+      expected: 'monster|valid-human|card-invalid-human|application-invalid-human',
+      actual: `caseKind=${String(spec.caseKind ?? null)} truth=${JSON.stringify(truth ?? null)}`,
+    });
+  }
+  if (
+    monsterCount !== 2 ||
+    validHumanCount !== 2 ||
+    cardInvalidCount !== 1 ||
+    applicationInvalidCount !== 1
+  ) {
+    throwDayQuotaError({
+      dayIndex: config.dayIndex,
+      quotaId: '-',
+      specId: '-',
+      field: 'day5.caseComposition',
+      expected: 'monster=2 valid=2 cardInvalid=1 applicationInvalid=1',
+      actual: `monster=${monsterCount} valid=${validHumanCount} cardInvalid=${cardInvalidCount} applicationInvalid=${applicationInvalidCount}`,
+    });
+  }
+}
+
+function assertDay6CampaignContract(config: DayLevelConfig): void {
+  expectDayTotalAndOptional(config, 7, 0);
+  let monsterCount = 0;
+  let validHumanCount = 0;
+  let cardInvalidCount = 0;
+  let applicationInvalidCount = 0;
+  let idCardPassTrueCount = 0;
+  for (const quota of config.requiredCaseQuotas) {
+    if (quota.count !== 1) {
+      throwDayQuotaError({
+        dayIndex: config.dayIndex,
+        quotaId: quota.quotaId,
+        specId: quota.spec.specId,
+        field: 'count',
+        expected: '1',
+        actual: String(quota.count),
+      });
+    }
+    assertEmployeeConstraintQuota(config, quota);
+    const spec = quota.spec;
+    const truth = spec.truth;
+    if (truth?.idCardPass === true) {
+      idCardPassTrueCount += 1;
+    }
+    if (spec.caseKind === 'DISGUISED_MONSTER') {
+      if (truth?.appearancePass !== false) {
+        throwDayQuotaError({
+          dayIndex: config.dayIndex,
+          quotaId: quota.quotaId,
+          specId: spec.specId,
+          field: 'truth.appearancePass',
+          expected: 'false',
+          actual: String(truth?.appearancePass),
+        });
+      }
+      monsterCount += 1;
+      continue;
+    }
+    if (
+      spec.caseKind === 'VALID_HUMAN' &&
+      truth?.idCardPass === true &&
+      truth?.applicationPass === true &&
+      truth?.appearancePass === true
+    ) {
+      validHumanCount += 1;
+      continue;
+    }
+    if (
+      spec.caseKind === 'INVALID_HUMAN' &&
+      truth?.idCardPass === false &&
+      truth?.applicationPass === true &&
+      truth?.appearancePass === true
+    ) {
+      cardInvalidCount += 1;
+      continue;
+    }
+    if (
+      spec.caseKind === 'INVALID_HUMAN' &&
+      truth?.idCardPass === true &&
+      truth?.applicationPass === false &&
+      truth?.appearancePass === true
+    ) {
+      applicationInvalidCount += 1;
+      continue;
+    }
+    throwDayQuotaError({
+      dayIndex: config.dayIndex,
+      quotaId: quota.quotaId,
+      specId: spec.specId,
+      field: 'day6.casePattern',
+      expected: 'monster|valid-human|card-invalid-human|application-invalid-human',
+      actual: `caseKind=${String(spec.caseKind ?? null)} truth=${JSON.stringify(truth ?? null)}`,
+    });
+  }
+  if (
+    monsterCount !== 2 ||
+    validHumanCount !== 1 ||
+    cardInvalidCount !== 3 ||
+    applicationInvalidCount !== 1
+  ) {
+    throwDayQuotaError({
+      dayIndex: config.dayIndex,
+      quotaId: '-',
+      specId: '-',
+      field: 'day6.caseComposition',
+      expected: 'monster=2 valid=1 cardInvalid=3 applicationInvalid=1',
+      actual: `monster=${monsterCount} valid=${validHumanCount} cardInvalid=${cardInvalidCount} applicationInvalid=${applicationInvalidCount}`,
+    });
+  }
+  if (idCardPassTrueCount !== 4) {
+    throwDayQuotaError({
+      dayIndex: config.dayIndex,
+      quotaId: '-',
+      specId: '-',
+      field: 'day6.idCardPassTrueSlots',
+      expected: '4',
+      actual: String(idCardPassTrueCount),
     });
   }
 }
@@ -866,7 +1354,7 @@ export function assertDayCatalogValid(): void {
 
     ensureFullChecklistEnabledFromDay3(config);
     ensureVisitorAndPhoneEnabledFromDay4(config);
-    if (config.dayIndex >= 4) {
+    if (config.dayIndex >= 7) {
       ensurePlaceholderQueuePlan(config);
     }
   });
@@ -874,9 +1362,8 @@ export function assertDayCatalogValid(): void {
   assertDay1CampaignContract(CAMPAIGN_DAY_CONFIGS[0]);
   assertDay2CampaignContract(CAMPAIGN_DAY_CONFIGS[1]);
   assertDay3CampaignContract(CAMPAIGN_DAY_CONFIGS[2]);
-  ensurePlaceholderQueuePlan(CAMPAIGN_DAY_CONFIGS[3]);
-  ensurePlaceholderQueuePlan(CAMPAIGN_DAY_CONFIGS[4]);
-  ensurePlaceholderQueuePlan(CAMPAIGN_DAY_CONFIGS[5]);
+  assertDay5CampaignContract(CAMPAIGN_DAY_CONFIGS[4]);
+  assertDay6CampaignContract(CAMPAIGN_DAY_CONFIGS[5]);
   ensurePlaceholderQueuePlan(CAMPAIGN_DAY_CONFIGS[6]);
 }
 

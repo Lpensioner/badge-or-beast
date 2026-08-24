@@ -7,6 +7,14 @@ export type VisitorRoundId = string;
 export type VisitorCaseKind = 'valid-visitor' | 'disguised-monster-visitor';
 export type VisitorMismatchKind = 'appearance' | 'department' | 'purpose';
 
+export interface PhoneVerificationResult {
+  readonly checked: boolean;
+  readonly calledNumber: string | null;
+  readonly departmentMatched: boolean | null;
+  readonly appointmentFound: boolean | null;
+  readonly visitorArrived: boolean | null;
+}
+
 export interface VisitorClaim {
   readonly claimedVisitorKey: VisitorKey;
   readonly claimedDepartmentKey: AppointmentDepartmentKey;
@@ -23,6 +31,7 @@ export interface VisitorInspectionRound {
   readonly caseKind: VisitorCaseKind;
   readonly mismatchKinds: readonly VisitorMismatchKind[];
   readonly claim: VisitorClaim;
+  phoneVerificationResult?: PhoneVerificationResult | null;
 }
 
 export type VisitorDecision = 'allow' | 'deny';

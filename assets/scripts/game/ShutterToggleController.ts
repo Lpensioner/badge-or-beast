@@ -41,6 +41,7 @@ export class ShutterToggleController extends Component {
     private normalSpriteSizeMode: Sprite.SizeMode = Sprite.SizeMode.CUSTOM;
     private readonly userCloseAcceptedListeners = new Set<() => void>();
     private readonly shutterClosedSettledListeners = new Set<() => void>();
+    private readonly shutterOpenSettledListeners = new Set<() => void>();
     private readonly damagedVisualAppliedListeners = new Set<() => void>();
     private shutterImpactLoopRunning = false;
     private shutterImpactLoopTickScheduled = false;
@@ -82,6 +83,7 @@ export class ShutterToggleController extends Component {
         this.stopShutterImpactLoop();
         this.userCloseAcceptedListeners.clear();
         this.shutterClosedSettledListeners.clear();
+        this.shutterOpenSettledListeners.clear();
         this.damagedVisualAppliedListeners.clear();
         this.pendingDamagedVisual = false;
         this.animationTargetClosed = null;
@@ -93,6 +95,7 @@ export class ShutterToggleController extends Component {
         this.isAnimating = false;
         this.userCloseAcceptedListeners.clear();
         this.shutterClosedSettledListeners.clear();
+        this.shutterOpenSettledListeners.clear();
         this.damagedVisualAppliedListeners.clear();
         this.pendingDamagedVisual = false;
         this.animationTargetClosed = null;
@@ -266,6 +269,14 @@ export class ShutterToggleController extends Component {
         this.shutterClosedSettledListeners.delete(listener);
     }
 
+    public addShutterOpenSettledListener(listener: () => void): void {
+        this.shutterOpenSettledListeners.add(listener);
+    }
+
+    public removeShutterOpenSettledListener(listener: () => void): void {
+        this.shutterOpenSettledListeners.delete(listener);
+    }
+
     private onShutterTouchEnd(): void {
         if (!this.ready || !this.shutterVisual) {
             return;
@@ -393,10 +404,9 @@ export class ShutterToggleController extends Component {
                 this.animationTargetClosed = null;
                 if (closed) {
                     this.shutterVisual?.setPosition(this.closedPosition);
-                    AudioManager.getInstance()?.startAlarmLoop();
                     this.notifyShutterClosedSettled();
                 } else {
-                    AudioManager.getInstance()?.stopAlarmLoop();
+                    this.notifyShutterOpenSettled();
                 }
                 this.syncButtonInteractable();
                 if (closed && this.pendingDamagedVisual) {
@@ -468,7 +478,9 @@ export class ShutterToggleController extends Component {
                 if (!this.applyDamagedClosedVisualForImpactLoop()) {
                     console.error('[Shutter] impact loop aborted: failed to apply damaged visual');
                     this.stopShutterImpactLoop();
+                    return;
                 }
+                AudioManager.getInstance()?.playCachedMonsterWindowImpact();
             })
             .to(
                 this.shutterImpactDamageScaleUpSeconds,
@@ -629,6 +641,16 @@ export class ShutterToggleController extends Component {
             return;
         }
         const listeners = Array.from(this.shutterClosedSettledListeners);
+        for (const listener of listeners) {
+            listener();
+        }
+    }
+
+    private notifyShutterOpenSettled(): void {
+        if (this.isDestroying || this.isAnimating || this.isClosedState || this.animationTargetClosed !== null) {
+            return;
+        }
+        const listeners = Array.from(this.shutterOpenSettledListeners);
         for (const listener of listeners) {
             listener();
         }

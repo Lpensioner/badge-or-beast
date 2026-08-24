@@ -200,6 +200,12 @@ export class AudioManager extends Component {
   }
 
   public playMusic(id: MusicId, loop = true, forceRestart = false): void {
+    console.log(
+      '[AudioDebug] playMusic',
+      'id=', id,
+      'musicEnabled=', this.musicEnabled,
+      'musicSourceValid=', this.musicSource?.isValid,
+    );
     if (!this.musicEnabled) {
       return;
     }
@@ -252,6 +258,10 @@ export class AudioManager extends Component {
           console.error(`[AudioManager] Failed to load music. id=${id} path=${path}`);
           return;
         }
+        console.log(
+          '[AudioDebug] music clip loaded',
+          id,
+        );
         this.applyMusicClip(clip, id, loop, requestSerial);
       })
       .catch((error: unknown) => {
@@ -483,6 +493,25 @@ export class AudioManager extends Component {
   }
 
   /**
+   * Play Day0 Ending unknown-number phone ring SFX using a pre-cached AudioClip only.
+   * If the clip is not cached yet, skips silently (never late catch-up playback).
+   */
+  public playCachedDay0UnknownNumberPhoneRing(): void {
+    if (!this.soundEnabled) {
+      return;
+    }
+    const source = this.sfxSource;
+    if (!source?.isValid) {
+      return;
+    }
+    const clip = this.clipCache.get(GameAudioCatalog.Day0UnknownNumberPhoneRingId);
+    if (!clip) {
+      return;
+    }
+    source.playOneShot(clip, 1);
+  }
+
+  /**
    * Play checklist decision-mark SFX using a pre-cached AudioClip only.
    * Same clip for both check (√) and cross (×). Skips silently if not cached yet.
    */
@@ -495,6 +524,44 @@ export class AudioManager extends Component {
       return;
     }
     const clip = this.clipCache.get(GameAudioCatalog.DecisionMarkId);
+    if (!clip) {
+      return;
+    }
+    source.playOneShot(clip, 1);
+  }
+
+  /**
+   * Play monster window-impact SFX using a pre-cached AudioClip only.
+   * Controlled by Sound Effects (soundEnabled). Skips silently if not cached yet.
+   */
+  public playCachedMonsterWindowImpact(): void {
+    if (!this.soundEnabled) {
+      return;
+    }
+    const source = this.sfxSource;
+    if (!source?.isValid) {
+      return;
+    }
+    const clip = this.clipCache.get(SoundEffectId.HammerHit01);
+    if (!clip) {
+      return;
+    }
+    source.playOneShot(clip, 1);
+  }
+
+  /**
+   * Play monster disguise-reveal roar SFX using a pre-cached AudioClip only.
+   * Controlled by Sound Effects (soundEnabled). Skips silently if not cached yet.
+   */
+  public playCachedMonsterDisguiseRevealRoar(): void {
+    if (!this.soundEnabled) {
+      return;
+    }
+    const source = this.sfxSource;
+    if (!source?.isValid) {
+      return;
+    }
+    const clip = this.clipCache.get(GameAudioCatalog.MonsterDisguiseRevealRoarId);
     if (!clip) {
       return;
     }
@@ -665,6 +732,22 @@ export class AudioManager extends Component {
     return this.clipCache.has(GameAudioCatalog.SettingsClickId);
   }
 
+  /**
+   * Read duration of a preloaded clip (seconds).
+   * Returns null when clip is not cached or duration is invalid.
+   */
+  public getCachedClipDurationSeconds(id: GameAudioId): number | null {
+    const clip = this.clipCache.get(id);
+    if (!clip) {
+      return null;
+    }
+    const durationSec = typeof clip.getDuration === 'function' ? clip.getDuration() : 0;
+    if (!Number.isFinite(durationSec) || durationSec <= 0) {
+      return null;
+    }
+    return durationSec;
+  }
+
   private applyMusicClip(
     clip: AudioClip,
     id: MusicId,
@@ -688,6 +771,10 @@ export class AudioManager extends Component {
     this.musicSource.clip = clip;
     this.musicSource.loop = loop;
     this.musicSource.volume = VOLUME_MUSIC;
+    console.log(
+      '[AudioDebug] music source play',
+      id,
+    );
     this.musicSource.play();
     this.currentMusicId = id;
   }
@@ -711,9 +798,26 @@ export class AudioManager extends Component {
   }
 
   private onFirstInteraction = (): void => {
-    this.unbindFirstInteractionUnlock();
     this.handleUserGesture();
+    if (this.shouldReleaseFirstInteractionUnlockListener()) {
+      this.unbindFirstInteractionUnlock();
+    }
   };
+
+  private shouldReleaseFirstInteractionUnlockListener(): boolean {
+    // Music disabled means there is no unlock work left to do.
+    if (!this.musicEnabled) {
+      return true;
+    }
+
+    const source = this.musicSource;
+    // Keep listening until a valid music source actually starts playing.
+    if (!source?.isValid) {
+      return false;
+    }
+
+    return source.playing;
+  }
 
   private preloadCoreClips(): void {
     // Warm Settings click, document flip, shutter/alarm/drawer/phone/decision-mark,
@@ -726,11 +830,15 @@ export class AudioManager extends Component {
     void this.loadClip(GameAudioCatalog.DrawerMoveId);
     void this.loadClip(GameAudioCatalog.PhoneDialId);
     void this.loadClip(GameAudioCatalog.PhoneConnectedId);
+    void this.loadClip(GameAudioCatalog.Day0UnknownNumberPhoneRingId);
     void this.loadClip(GameAudioCatalog.DecisionMarkId);
+    void this.loadClip(SoundEffectId.HammerHit01);
+    void this.loadClip(GameAudioCatalog.MonsterDisguiseRevealRoarId);
     void this.loadClip(GameAudioCatalog.FootstepsId);
     void this.loadClip(GameAudioCatalog.AlienVoiceId);
     void this.loadClip(GameAudioCatalog.ComplaintVoiceId);
     void this.loadClip(GameAudioCatalog.DefaultMusicId);
+    void this.loadClip(GameAudioCatalog.Day0IdentityRevealMusicId);
   }
 
   private applyAlarmClip(clip: AudioClip): void {
@@ -879,4 +987,5 @@ export class AudioManager extends Component {
       console.warn('[AudioManager] Failed to persist audio settings.', error);
     }
   }
+
 }

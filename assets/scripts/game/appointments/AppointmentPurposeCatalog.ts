@@ -23,12 +23,12 @@ const APPOINTMENT_PURPOSE_DEFINITIONS: readonly AppointmentPurposeDefinition[] =
   }),
   Object.freeze({
     key: 'confidential-document-delivery',
-    displayName: 'DELIVERY OF CONFIDENTIAL DOCUMENTS',
+    displayName: 'CONFIDENTIAL DOC DELIVERY',
     spokenVisitReason: 'delivery of confidential documents',
   }),
   Object.freeze({
     key: 'contract-review-authorization',
-    displayName: 'CONTRACT REVIEW AND AUTHORIZATION',
+    displayName: 'CONTRACT REVIEW AUTHORIZATION',
     spokenVisitReason: 'contract review and authorization',
   }),
 ]);

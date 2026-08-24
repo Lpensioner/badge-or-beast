@@ -9,9 +9,9 @@ const VISITOR_PROFILES_BY_KEY: Readonly<Record<VisitorKey, VisitorProfile>> = {
     displayName: 'Edward',
     visuals: {
       portraitSpriteFrameUuid: 'd2228939-d053-454a-af98-e8122c580b5e@f9941',
-      disguisedSpriteFrameUuid: '7b90403a-77c4-4b84-b35d-cf772223009e@f9941',
-      monsterPortraitSpriteFrameUuid: '21d42ea0-5bc2-489b-a1a2-d2a23994d01f@f9941',
-      monsterFullbodySpriteFrameUuid: '36ece0d5-310c-48ea-8b9b-102e98cdf9b5@f9941',
+      disguisedSpriteFrameUuid: 'ed4fa10d-d0f0-49b7-ae28-831c9c5db703@f9941',
+      monsterPortraitSpriteFrameUuid: '967ecd17-bb42-4794-8760-87ad19b1c8f8@f9941',
+      monsterFullbodySpriteFrameUuid: 'bb23b4f5-ef3a-453e-a5c3-53386b625073@f9941',
     },
     appearanceFeatures: ['WEARS GLASSES', 'WEARS A STUD EARRING'],
   },
@@ -19,10 +19,10 @@ const VISITOR_PROFILES_BY_KEY: Readonly<Record<VisitorKey, VisitorProfile>> = {
     visitorKey: 'nadia',
     displayName: 'Nadia',
     visuals: {
-      portraitSpriteFrameUuid: '3ebae69b-3b00-4ab9-97bd-e1ab58cf62f6@f9941',
-      disguisedSpriteFrameUuid: 'e6de89a7-9289-4423-a616-29c01659aa55@f9941',
-      monsterPortraitSpriteFrameUuid: '23c7533f-3c9f-472f-8a19-226ee2a226fa@f9941',
-      monsterFullbodySpriteFrameUuid: '580fd27a-5a15-4564-b775-5862c6eed41d@f9941',
+      portraitSpriteFrameUuid: 'f77d5f5a-0794-4c52-b5a6-26b640f70ba4@f9941',
+      disguisedSpriteFrameUuid: '4bd832bc-6008-455d-ae8f-224ab0573335@f9941',
+      monsterPortraitSpriteFrameUuid: 'c666fda2-bf05-404a-8d55-ac3f6fc2cd71@f9941',
+      monsterFullbodySpriteFrameUuid: 'fce5a761-ac38-4ac8-bd45-c3db3656e562@f9941',
     },
     appearanceFeatures: [
       'HAS A MOLE NEAR THE OUTER CORNER OF HER RIGHT EYE',

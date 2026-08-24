@@ -14,7 +14,7 @@ import type {
 } from './DayQueueTypes';
 import type { DayLevelConfig } from './DayLevelConfig';
 
-const VISIBLE_CARD_FAILURE_FIELDS: readonly EmployeeCardField[] = ['EMPLOYEE_ID', 'NAME', 'VALID_UNTIL'];
+const VISIBLE_CARD_FAILURE_FIELDS: readonly EmployeeCardField[] = ['EMPLOYEE_ID', 'NAME', 'VALID_UNTIL', 'SEAL'];
 const VISIBLE_APPLICATION_FAILURE_FIELDS: readonly ApplicationField[] = [
   'EMPLOYEE_ID',
   'NAME',

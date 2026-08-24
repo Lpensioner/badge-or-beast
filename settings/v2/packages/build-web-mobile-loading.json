@@ -1,0 +1,55 @@
+{
+  "platform": "web-mobile",
+  "debug": true,
+  "outputName": "web-mobile",
+  "taskName": "web-mobile",
+  "buildMode": "normal",
+  "mainBundleCompressionType": "merge_dep",
+  "name": "badge-or-beast",
+  "engineModulesConfigKey": "defaultConfig",
+  "buildPath": "project://build",
+  "mangleProperties": false,
+  "md5Cache": false,
+  "skipCompressTexture": false,
+  "sourceMaps": false,
+  "nativeCodeBundleMode": "both",
+  "polyfills": {
+    "asyncFunctions": true
+  },
+  "experimentalEraseModules": false,
+  "startSceneAssetBundle": false,
+  "bundleConfigs": [],
+  "inlineEnum": true,
+  "useBuiltinServer": false,
+  "mainBundleIsRemote": false,
+  "useSplashScreen": true,
+  "startScene": "b308584a-9e82-41dc-b011-e22f1a21d2c9",
+  "scenes": [
+    {
+      "url": "db://assets/scene.scene",
+      "uuid": "b308584a-9e82-41dc-b011-e22f1a21d2c9"
+    },
+    {
+      "url": "db://assets/scenes/GameScene.scene",
+      "uuid": "b17659e9-d33a-4b76-a20e-bab4d87d641d"
+    },
+    {
+      "url": "db://assets/scenes/HomeScene.scene",
+      "uuid": "f35f3cd5-389a-43da-a0cc-63dc837cb63c"
+    }
+  ],
+  "splashScreen": {
+    "displayRatio": 1,
+    "totalTime": 2000,
+    "watermarkLocation": "default",
+    "autoFit": true,
+    "logo": {
+      "type": "custom",
+      "image": "project://assets/resources/ui/loading/loading_spinner.png"
+    },
+    "background": {
+      "type": "custom",
+      "image": "project://assets/resources/ui/loading/loading_background.png"
+    }
+  }
+}

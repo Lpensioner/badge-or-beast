@@ -130,12 +130,23 @@ export interface CampaignDocumentDeliveryAvailability {
   readonly applicationFormEnabled: boolean;
 }
 
+type ShiftClockLayoutMode = 'default' | 'day0-ending';
+
+interface ShiftClockLabelLayoutSpec {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  readonly fontSize: number;
+  readonly align: HorizontalTextAlignment;
+}
+
 @ccclass('VisitorIntroSequenceController')
 export class VisitorIntroSequenceController extends Component {
   private static readonly DOCUMENT_INTRO_SCALE_FACTOR = 0.24;
   private static readonly VISITOR_CLAIM_MINIMUM_VISIBLE_SECONDS = 0.25;
   private static readonly SHIFT_CLOCK_PANEL_SPRITEFRAME_PATH =
-    'ui/game/control_room/ui_shift_clock_panel_bg/spriteFrame';
+    'ui/game/control_room/ui_shift_clock_panel_bg_webp_v1/spriteFrame';
   private static readonly PURGE_PANEL_SPRITEFRAME_PATH =
     'ui/game/control_room/ui_purge_procedure_1214/spriteFrame';
   private static readonly SHIFT_CLOCK_PANEL_POSITION = new Vec3(-4, 484.9, 0);
@@ -152,6 +163,74 @@ export class VisitorIntroSequenceController extends Component {
   private static readonly SHIFT_CLOCK_TEXT_COLOR = new Color(255, 38, 28, 255);
   private static readonly SHIFT_CLOCK_TEXT_OUTLINE_COLOR = new Color(120, 12, 8, 220);
   private static readonly SHIFT_CLOCK_TEXT_SHADOW_COLOR = new Color(255, 20, 14, 180);
+  private static readonly SHIFT_CLOCK_DEFAULT_LAYOUT = Object.freeze({
+    day: Object.freeze<ShiftClockLabelLayoutSpec>({
+      x: -110,
+      y: 47,
+      width: 132,
+      height: 26,
+      fontSize: 23,
+      align: HorizontalTextAlignment.LEFT,
+    }),
+    date: Object.freeze<ShiftClockLabelLayoutSpec>({
+      x: 44,
+      y: 47,
+      width: 194,
+      height: 28,
+      fontSize: 23,
+      align: HorizontalTextAlignment.CENTER,
+    }),
+    time: Object.freeze<ShiftClockLabelLayoutSpec>({
+      x: -12,
+      y: -8,
+      width: 192,
+      height: 82,
+      fontSize: 62,
+      align: HorizontalTextAlignment.CENTER,
+    }),
+    period: Object.freeze<ShiftClockLabelLayoutSpec>({
+      x: 102,
+      y: -14,
+      width: 64,
+      height: 36,
+      fontSize: 24,
+      align: HorizontalTextAlignment.LEFT,
+    }),
+  });
+  private static readonly SHIFT_CLOCK_DAY0_ENDING_LAYOUT = Object.freeze({
+    day: Object.freeze<ShiftClockLabelLayoutSpec>({
+      x: 0,
+      y: 44,
+      width: 340,
+      height: 30,
+      fontSize: 24,
+      align: HorizontalTextAlignment.CENTER,
+    }),
+    date: Object.freeze<ShiftClockLabelLayoutSpec>({
+      x: 0,
+      y: 10,
+      width: 320,
+      height: 28,
+      fontSize: 21,
+      align: HorizontalTextAlignment.CENTER,
+    }),
+    time: Object.freeze<ShiftClockLabelLayoutSpec>({
+      x: 0,
+      y: -18,
+      width: 200,
+      height: 28,
+      fontSize: 18,
+      align: HorizontalTextAlignment.CENTER,
+    }),
+    period: Object.freeze<ShiftClockLabelLayoutSpec>({
+      x: 0,
+      y: -34,
+      width: 220,
+      height: 38,
+      fontSize: 30,
+      align: HorizontalTextAlignment.CENTER,
+    }),
+  });
   private static readonly SHIFT_CLOCK_DEFAULT_DISPLAY: ShiftDisplayState = Object.freeze({
     nightIndex: 1,
     dateText: '1999-12-03 FRI',
@@ -250,6 +329,7 @@ export class VisitorIntroSequenceController extends Component {
   private shiftDateLabel: Label | null = null;
   private shiftTimeLabel: Label | null = null;
   private shiftPeriodLabel: Label | null = null;
+  private shiftClockLayoutMode: ShiftClockLayoutMode = 'default';
   private shiftClockSpriteLoadAttempted = false;
   private purgePanelSpriteLoadAttempted = false;
   private purgePanelSpriteLoadLogged = false;
@@ -586,6 +666,8 @@ export class VisitorIntroSequenceController extends Component {
   }
 
   public setShiftDisplay(display: ShiftDisplayState): void {
+    this.applyShiftClockLayout('default');
+    this.applyDefaultShiftClockColorTheme();
     const normalized = this.normalizeShiftDisplay(display);
     if (this.shiftDayLabel && isValid(this.shiftDayLabel, true)) {
       this.shiftDayLabel.string = `NIGHT ${normalized.nightIndex}`;
@@ -602,6 +684,8 @@ export class VisitorIntroSequenceController extends Component {
   }
 
   public setCampaignShiftDisplay(display: CampaignShiftDisplayState): void {
+    this.applyShiftClockLayout('default');
+    this.applyDefaultShiftClockColorTheme();
     const dayIndex = Number.isFinite(display.dayIndex) ? Math.max(1, Math.floor(display.dayIndex)) : 1;
     const dateText = display.date?.trim() || '1999-12-03';
     const timeText = display.displayTime?.trim() || '09:00';
@@ -621,6 +705,8 @@ export class VisitorIntroSequenceController extends Component {
   }
 
   public setCampaignShiftCompletionDisplay(display: CampaignShiftCompletionDisplayState): void {
+    this.applyShiftClockLayout('default');
+    this.applyDefaultShiftClockColorTheme();
     const dayIndex = Number.isFinite(display.dayIndex) ? Math.max(1, Math.floor(display.dayIndex)) : 1;
     const dateText = display.date?.trim() || '1999-12-03';
     const timeText = display.displayTime?.trim() || '09:00';
@@ -636,6 +722,39 @@ export class VisitorIntroSequenceController extends Component {
     }
     if (this.shiftPeriodLabel && isValid(this.shiftPeriodLabel, true)) {
       this.shiftPeriodLabel.string = periodText;
+    }
+  }
+
+  public setDay0EndingDisplay(): void {
+    this.applyShiftClockLayout('day0-ending');
+    this.applyDefaultShiftClockColorTheme();
+    const stableGreenColor = new Color(83, 215, 105, 255);
+    const stableOutlineColor = new Color(23, 110, 38, 220);
+    const stableShadowColor = new Color(18, 84, 30, 170);
+    if (this.shiftDayLabel && isValid(this.shiftDayLabel, true)) {
+      this.shiftDayLabel.string = 'ALL EMPLOYEES VERIFIED';
+      this.shiftDayLabel.enableRichText = false;
+    }
+    if (this.shiftDateLabel && isValid(this.shiftDateLabel, true)) {
+      this.shiftDateLabel.enableRichText = false;
+      this.shiftDateLabel.string = 'SECURITY STATUS:';
+    }
+    if (this.shiftTimeLabel && isValid(this.shiftTimeLabel, true)) {
+      this.shiftTimeLabel.string = '';
+      this.shiftTimeLabel.enableRichText = false;
+    }
+    if (this.shiftPeriodLabel && isValid(this.shiftPeriodLabel, true)) {
+      this.shiftPeriodLabel.string = 'STABLE';
+      this.shiftPeriodLabel.color = stableGreenColor;
+      this.shiftPeriodLabel.enableRichText = false;
+      const outline = this.shiftPeriodLabel.node.getComponent(LabelOutline);
+      if (outline) {
+        outline.color = stableOutlineColor;
+      }
+      const shadow = this.shiftPeriodLabel.node.getComponent(LabelShadow);
+      if (shadow) {
+        shadow.color = stableShadowColor;
+      }
     }
   }
 
@@ -828,6 +947,60 @@ export class VisitorIntroSequenceController extends Component {
     shadow.offset = new Vec2(0, 0);
     shadow.blur = Math.max(4, Math.round(config.fontSize / 6));
     return label;
+  }
+
+  private applyShiftClockLayout(mode: ShiftClockLayoutMode): void {
+    if (this.shiftClockLayoutMode === mode) {
+      return;
+    }
+    const layout =
+      mode === 'day0-ending'
+        ? VisitorIntroSequenceController.SHIFT_CLOCK_DAY0_ENDING_LAYOUT
+        : VisitorIntroSequenceController.SHIFT_CLOCK_DEFAULT_LAYOUT;
+    this.applyShiftClockLabelLayout(this.shiftDayLabel, layout.day);
+    this.applyShiftClockLabelLayout(this.shiftDateLabel, layout.date);
+    this.applyShiftClockLabelLayout(this.shiftTimeLabel, layout.time);
+    this.applyShiftClockLabelLayout(this.shiftPeriodLabel, layout.period);
+    this.shiftClockLayoutMode = mode;
+  }
+
+  private applyShiftClockLabelLayout(label: Label | null, spec: ShiftClockLabelLayoutSpec): void {
+    if (!label || !isValid(label, true) || !label.node?.isValid) {
+      return;
+    }
+    label.node.setPosition(spec.x, spec.y, 0);
+    const uiTransform = label.node.getComponent(UITransform) ?? label.node.addComponent(UITransform);
+    uiTransform.setContentSize(spec.width, spec.height);
+    label.horizontalAlign = spec.align;
+    label.verticalAlign = VerticalTextAlignment.CENTER;
+    label.fontSize = spec.fontSize;
+    label.lineHeight = Math.round(spec.fontSize * 1.08);
+    const outline = label.node.getComponent(LabelOutline) ?? label.node.addComponent(LabelOutline);
+    outline.color = VisitorIntroSequenceController.SHIFT_CLOCK_TEXT_OUTLINE_COLOR;
+    outline.width = Math.max(1, Math.round(spec.fontSize / 18));
+    const shadow = label.node.getComponent(LabelShadow) ?? label.node.addComponent(LabelShadow);
+    shadow.color = VisitorIntroSequenceController.SHIFT_CLOCK_TEXT_SHADOW_COLOR;
+    shadow.offset = new Vec2(0, 0);
+    shadow.blur = Math.max(4, Math.round(spec.fontSize / 6));
+  }
+
+  private applyDefaultShiftClockColorTheme(): void {
+    const labels = [
+      this.shiftDayLabel,
+      this.shiftDateLabel,
+      this.shiftTimeLabel,
+      this.shiftPeriodLabel,
+    ];
+    for (const label of labels) {
+      if (!label || !isValid(label, true)) {
+        continue;
+      }
+      label.color = VisitorIntroSequenceController.SHIFT_CLOCK_TEXT_COLOR;
+      const outline = label.node.getComponent(LabelOutline) ?? label.node.addComponent(LabelOutline);
+      outline.color = VisitorIntroSequenceController.SHIFT_CLOCK_TEXT_OUTLINE_COLOR;
+      const shadow = label.node.getComponent(LabelShadow) ?? label.node.addComponent(LabelShadow);
+      shadow.color = VisitorIntroSequenceController.SHIFT_CLOCK_TEXT_SHADOW_COLOR;
+    }
   }
 
   private initializePurgeProcedurePanelVisual(panelBgNode: Node): void {

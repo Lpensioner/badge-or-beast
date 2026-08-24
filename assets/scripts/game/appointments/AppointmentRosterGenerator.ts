@@ -1,6 +1,11 @@
 import { getAppointmentDepartmentLabel } from './AppointmentDepartmentCatalog';
 import { getAppointmentPurposeLabel } from './AppointmentPurposeCatalog';
-import type { AppointmentDepartmentKey, AppointmentRosterDay, AppointmentRosterEntry } from './AppointmentTypes';
+import type {
+  AppointmentArrivalStatus,
+  AppointmentDepartmentKey,
+  AppointmentRosterDay,
+  AppointmentRosterEntry,
+} from './AppointmentTypes';
 import type { AppointmentPurposeKey } from './AppointmentPurposeCatalog';
 import { getVisitorProfile } from '../visitors/VisitorProfileCatalog';
 import type { VisitorKey } from '../visitors/VisitorTypes';
@@ -8,6 +13,9 @@ import type { VisitorKey } from '../visitors/VisitorTypes';
 const DAY4_INDEX = 4;
 const DAY4_INSPECTION_DATE = '1999-12-06';
 const DAY4_VISITOR_KEYS: readonly [VisitorKey, VisitorKey] = ['edward', 'nadia'];
+const DAY4_APPOINTMENT_ID_PATTERN = /^D4-\d{6}$/;
+const APPOINTMENT_ID_GENERATION_MAX_ATTEMPTS = 128;
+const APPOINTMENT_ID_NAMESPACE_SIZE = 1_000_000;
 const DEPARTMENT_POOL: readonly AppointmentDepartmentKey[] = ['research', 'production', 'sales'];
 const PURPOSE_POOL: readonly AppointmentPurposeKey[] = [
   'project-consultation',
@@ -20,27 +28,36 @@ interface BuildDay4AppointmentRosterOptions {
   readonly random?: () => number;
 }
 
+function generateArrivalStatus(random: () => number): AppointmentArrivalStatus {
+  return nextRandomValue(random) < 0.5 ? 'arrived' : 'not_arrived';
+}
+
 export function buildDay4AppointmentRoster(options?: BuildDay4AppointmentRosterOptions): AppointmentRosterDay {
   const random = options?.random ?? Math.random;
   const [edwardDepartment, nadiaDepartment] = pickDistinctTwo(DEPARTMENT_POOL, random, 'department');
   const [edwardPurpose, nadiaPurpose] = pickDistinctTwo(PURPOSE_POOL, random, 'purpose');
+  const [edwardAppointmentId, nadiaAppointmentId] = generateDistinctDay4AppointmentIds(random);
+  const edwardArrivalStatus = generateArrivalStatus(random);
+  const nadiaArrivalStatus = generateArrivalStatus(random);
 
   const entries: readonly AppointmentRosterEntry[] = Object.freeze([
     Object.freeze({
-      appointmentId: 'day4-edward',
+      appointmentId: edwardAppointmentId,
       visitorKey: DAY4_VISITOR_KEYS[0],
       inspectionDate: DAY4_INSPECTION_DATE,
       targetDepartmentKey: edwardDepartment,
       purposeKey: edwardPurpose,
       listed: true,
+      arrivalStatus: edwardArrivalStatus,
     }),
     Object.freeze({
-      appointmentId: 'day4-nadia',
+      appointmentId: nadiaAppointmentId,
       visitorKey: DAY4_VISITOR_KEYS[1],
       inspectionDate: DAY4_INSPECTION_DATE,
       targetDepartmentKey: nadiaDepartment,
       purposeKey: nadiaPurpose,
       listed: true,
+      arrivalStatus: nadiaArrivalStatus,
     }),
   ]);
 
@@ -86,6 +103,54 @@ function nextRandomValue(random: () => number): number {
   return value;
 }
 
+function buildDay4AppointmentId(random: () => number): string {
+  const normalizedRandom = nextRandomValue(random);
+  const numericPart = Math.floor(normalizedRandom * APPOINTMENT_ID_NAMESPACE_SIZE);
+  return `D4-${numericPart.toString().padStart(6, '0')}`;
+}
+
+function parseAppointmentNumericPart(appointmentId: string): number {
+  const numericPartText = appointmentId.slice(3);
+  const numericPart = Number.parseInt(numericPartText, 10);
+  if (!Number.isInteger(numericPart) || numericPart < 0 || numericPart >= APPOINTMENT_ID_NAMESPACE_SIZE) {
+    throw new Error(`[AppointmentRosterGenerator] Invalid appointmentId numeric part: ${appointmentId}`);
+  }
+  return numericPart;
+}
+
+function buildDeterministicUniqueDay4AppointmentId(startingNumericPart: number, usedIds: ReadonlySet<string>): string {
+  for (let offset = 1; offset <= APPOINTMENT_ID_NAMESPACE_SIZE; offset += 1) {
+    const candidateNumber = (startingNumericPart + offset) % APPOINTMENT_ID_NAMESPACE_SIZE;
+    const candidate = `D4-${candidateNumber.toString().padStart(6, '0')}`;
+    if (!usedIds.has(candidate)) {
+      return candidate;
+    }
+  }
+  throw new Error('[AppointmentRosterGenerator] Day 4 appointment ID namespace exhausted.');
+}
+
+function generateDistinctDay4AppointmentIds(random: () => number): readonly [string, string] {
+  const ids = new Set<string>();
+  let attempts = 0;
+  let lastNumericPart = 0;
+  while (ids.size < 2 && attempts < APPOINTMENT_ID_GENERATION_MAX_ATTEMPTS) {
+    const candidate = buildDay4AppointmentId(random);
+    ids.add(candidate);
+    lastNumericPart = parseAppointmentNumericPart(candidate);
+    attempts += 1;
+  }
+  if (ids.size < 2) {
+    ids.add(buildDeterministicUniqueDay4AppointmentId(lastNumericPart, ids));
+  }
+  const pair = [...ids];
+  const first = pair[0];
+  const second = pair[1];
+  if (!first || !second) {
+    throw new Error('[AppointmentRosterGenerator] Generated Day 4 appointment IDs are incomplete.');
+  }
+  return [first, second] as const;
+}
+
 function validateDay4Roster(roster: AppointmentRosterDay): void {
   if (roster.dayIndex !== DAY4_INDEX) {
     throw new Error(`[AppointmentRosterGenerator] Invalid dayIndex: ${roster.dayIndex}`);
@@ -105,6 +170,11 @@ function validateDay4Roster(roster: AppointmentRosterDay): void {
   for (const entry of roster.entries) {
     if (entry.appointmentId.trim().length === 0) {
       throw new Error('[AppointmentRosterGenerator] appointmentId must be non-empty.');
+    }
+    if (!DAY4_APPOINTMENT_ID_PATTERN.test(entry.appointmentId)) {
+      throw new Error(
+        `[AppointmentRosterGenerator] appointmentId must match D4-\\d{6} format: ${entry.appointmentId}`,
+      );
     }
     if (entry.inspectionDate.trim().length === 0) {
       throw new Error('[AppointmentRosterGenerator] inspectionDate must be non-empty.');

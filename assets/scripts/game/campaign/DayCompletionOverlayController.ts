@@ -55,10 +55,11 @@ interface OverlayLabels {
 @ccclass('DayCompletionOverlayController')
 export class DayCompletionOverlayController extends Component {
   private static readonly RUNTIME_ROOT_NAME = 'CampaignDayCompletionOverlayRuntime';
+  private static readonly DAY_COMPLETE_PANEL_ASSET_SOURCE_NAME = 'DayCompletePanelAssetSource';
   private static readonly PANEL_BACKGROUND_SPRITEFRAME_PATH =
     'ui/game/campaign/day_complete/ui_day_complete_panel_bg_v1/spriteFrame';
   private static readonly PANEL_BACKGROUND_FALLBACK_SPRITEFRAME_PATH =
-    'ui/game/control_room/ui_shift_clock_panel_bg/spriteFrame';
+    'ui/game/control_room/ui_shift_clock_panel_bg_webp_v1/spriteFrame';
   private static readonly DEFAULT_PANEL_ASPECT_RATIO = 829 / 1448;
   private static readonly PANEL_MAX_WIDTH_RATIO = 0.78;
   private static readonly PANEL_MAX_HEIGHT_RATIO = 0.82;
@@ -69,6 +70,7 @@ export class DayCompletionOverlayController extends Component {
   private inputBlocker: Node | null = null;
   private continueButton: Button | null = null;
   private panelBackgroundSprite: Sprite | null = null;
+  private panelBackgroundFromSceneSourceResolved = false;
   private panelBackgroundLoadAttempted = false;
   private panelBackgroundFallbackLoadAttempted = false;
   private panelBackgroundAspectRatio = DayCompletionOverlayController.DEFAULT_PANEL_ASPECT_RATIO;
@@ -193,6 +195,7 @@ export class DayCompletionOverlayController extends Component {
     this.inputBlocker = null;
     this.continueButton = null;
     this.panelBackgroundSprite = null;
+    this.panelBackgroundFromSceneSourceResolved = false;
     this.panelBackgroundLoadAttempted = false;
     this.panelBackgroundFallbackLoadAttempted = false;
     this.panelBackgroundAspectRatio = DayCompletionOverlayController.DEFAULT_PANEL_ASPECT_RATIO;
@@ -297,9 +300,29 @@ export class DayCompletionOverlayController extends Component {
     transform.setAnchorPoint(0.5, 0.5);
     transform.setContentSize(520, 908);
     this.panelBackgroundSprite = this.ensurePanelBackgroundVisual(panel);
-    this.tryLoadPanelBackgroundSprite();
+    this.panelBackgroundFromSceneSourceResolved = this.tryApplyPanelBackgroundFromSceneSource();
+    if (!this.panelBackgroundFromSceneSourceResolved) {
+      this.tryLoadPanelBackgroundSprite();
+    }
     this.disableLegacyPanelVisuals(panel);
     return panel;
+  }
+
+  private tryApplyPanelBackgroundFromSceneSource(): boolean {
+    const panelSprite = this.panelBackgroundSprite;
+    if (!panelSprite || !isValid(panelSprite, true)) {
+      return false;
+    }
+    const sourceNode = this.node.getChildByName(DayCompletionOverlayController.DAY_COMPLETE_PANEL_ASSET_SOURCE_NAME);
+    if (!sourceNode || !isValid(sourceNode, true)) {
+      return false;
+    }
+    const sourceFrame = sourceNode.getComponent(Sprite)?.spriteFrame ?? null;
+    if (!sourceFrame || !isValid(sourceFrame, true)) {
+      return false;
+    }
+    this.applyPanelSpriteFrame(sourceFrame, false);
+    return true;
   }
 
   private ensureLabels(panel: Node): OverlayLabels {

@@ -14,23 +14,31 @@ import {
   VerticalTextAlignment,
   tween,
 } from 'cc';
-import { getAppointmentDepartmentLabel } from './appointments/AppointmentDepartmentCatalog';
 import { getAppointmentPurposeLabel } from './appointments/AppointmentPurposeCatalog';
 import type { AppointmentDepartmentKey, AppointmentRosterDay, AppointmentRosterEntry } from './appointments/AppointmentTypes';
 import { resolveDepartmentPhoneLookup } from './phone/DepartmentPhoneDirectory';
-import { getVisitorProfile } from './visitors/VisitorProfileCatalog';
+import { setDay4VisitorPhoneVerificationResult } from './visitors/Day4VisitorSessionGenerator';
+import type { PhoneVerificationResult } from './visitors/VisitorRoundTypes';
 import type { VisitorKey } from './visitors/VisitorTypes';
+import { EmployeeFilesController } from './EmployeeFilesController';
 import {
   hideInteractivePanel,
   hideInteractivePanelImmediate,
   showInteractivePanel,
 } from './InteractivePanelTransition';
 import { AudioManager } from '../audio/AudioManager';
+import { GameAudioCatalog, VoiceId } from '../audio/GameAudioCatalog';
 
 const { ccclass } = _decorator;
 
-type DepartmentPhoneUiState = 'dialing' | 'question-menu' | 'question-answer' | 'terminal-result';
-type DepartmentPhoneQuestionKey = 'expected-today' | 'expected-name' | 'visit-purpose';
+type DepartmentPhoneUiState =
+  | 'dialing'
+  | 'connecting'
+  | 'connected'
+  | 'question-menu'
+  | 'question-answer'
+  | 'terminal-result';
+type DepartmentPhoneQuestionKey = 'ask-appointment-arrived' | 'nothing-happened';
 
 export interface DepartmentPhoneLookupContext {
   readonly rosterDay: AppointmentRosterDay | null;
@@ -95,6 +103,8 @@ export class TelephoneController extends Component {
   private departmentPhoneInquiryRuntime: Node | null = null;
   private departmentResponsePanel: Node | null = null;
   private departmentResponseLabel: Label | null = null;
+  private departmentResponsePanelButton: Button | null = null;
+  private departmentResponseContinueHintNode: Node | null = null;
   private departmentQuestionMenuRoot: Node | null = null;
   private departmentContinueButtonNode: Node | null = null;
   private departmentContinueButton: Button | null = null;
@@ -113,6 +123,7 @@ export class TelephoneController extends Component {
   private telephoneHitNode: Node | null = null;
 
   private managedButtons: Button[] = [];
+  private managedButtonsShapeWarningLogged = false;
   private phoneKeyVisualStates = new Map<Node, {
     node: Node;
     sprite: Sprite;
@@ -124,10 +135,39 @@ export class TelephoneController extends Component {
     pressCompleted: boolean;
   }>();
   private readonly departmentQuestionPrompts: Readonly<Record<DepartmentPhoneQuestionKey, string>> = Object.freeze({
-    'expected-today': 'IS ANYONE EXPECTED TODAY?',
-    'expected-name': 'WHO ARE YOU EXPECTING?',
-    'visit-purpose': 'WHAT IS THE PURPOSE OF THE VISIT?',
+    'ask-appointment-arrived': 'ASK IF THE APPOINTMENT PERSON HAS ARRIVED.',
+    'nothing-happened': 'NOTHING HAPPENED.',
   });
+  private latestDepartmentResponseText = '';
+  private readonly departmentResponseTypingIntervalSec = 0.03;
+  private departmentResponseTyping = false;
+  private departmentResponseTypingFullText = '';
+  private departmentResponseTypingLength = 0;
+  private departmentCallSequenceSerial = 0;
+  private pendingDepartmentConnectSequenceSerial = -1;
+  private pendingDepartmentReplySequenceSerial = -1;
+  private readonly departmentConnectDelayFallbackSec = 2.4;
+  private readonly departmentReplyDurationFallbackSec = 2.0;
+  private readonly standardPhoneDialDelayFallbackSec = 0.8;
+  private readonly standardPhoneConnectedDelayFallbackSec = 0.8;
+  private readonly standardPhoneNoAnswerNumbers = new Set(['9527', '6842', '7716']);
+  private departmentReplyAutoAdvanceDelaySec = 2.0;
+  private standardPhoneCallSequenceSerial = 0;
+  private pendingStandardPhoneResultSequenceSerial = -1;
+  private pendingStandardPhoneDialedNumber = '';
+  private connectedGreetingLines: string[] = [];
+  private connectedGreetingLineIndex = -1;
+  private day0EndingUnknownCallActive = false;
+  private day0EndingUnknownCallLines: string[] = [];
+  private day0EndingUnknownCallLineIndex = -1;
+  private day0EndingUnknownCallArmed = false;
+  private day0EndingUnknownCallArmedLines: string[] = [];
+  private day0EndingUnknownCallOnComplete: (() => void) | null = null;
+  private day0EndingUnknownCallOnStart: (() => void) | null = null;
+  private readonly day0EndingUnknownCallInitialDelaySec = 0.9;
+  private readonly day0EndingUnknownCallLineDelaySec = 1.8;
+  private readonly day0EndingUnknownCallFinalCloseDelaySec = 1.5;
+  private day0EndingTelephoneStoryLock = false;
 
   onLoad(): void {
     const deskEvidenceRuntime = this.node.parent;
@@ -151,6 +191,7 @@ export class TelephoneController extends Component {
     this.phoneCallButton = phoneKeyStarNode?.getComponent(Button) ?? null;
     this.phoneHashBackspaceButton = phoneKeyHashNode?.getComponent(Button) ?? null;
     this.phoneNumberLabel = phoneNumberDisplay?.getComponent(Label) ?? null;
+    this.configurePhoneNumberLabelLayout();
     this.phoneKeypadRuntime = phoneKeypadRuntime;
     this.phoneBackspaceButtonNode = phoneBackspaceButtonNode;
     this.phonePanelScrimGraphics = this.phonePanelScrim?.getComponent(Graphics) ?? null;
@@ -344,6 +385,13 @@ export class TelephoneController extends Component {
     for (const binding of this.departmentInquiryBindings) {
       binding.button.node.off(Button.EventType.CLICK, binding.callback, this);
     }
+    this.stopDepartmentResponseTyping(false);
+    this.cancelPendingDepartmentSequenceTimers();
+    this.cancelPendingStandardPhoneResultTimer();
+    this.stopDepartmentVoiceIfNeeded();
+    this.clearDay0EndingUnknownNumberCallArmed();
+    this.stopDay0EndingUnknownNumberCall(false);
+    this.day0EndingTelephoneStoryLock = false;
   }
 
   onDestroy(): void {
@@ -358,10 +406,17 @@ export class TelephoneController extends Component {
     this.departmentQuestionButtonNodes.clear();
     this.departmentQuestionButtons.clear();
     this.departmentPhoneContextProvider = null;
+    this.stopDepartmentResponseTyping(false);
+    this.cancelPendingDepartmentSequenceTimers();
+    this.cancelPendingStandardPhoneResultTimer();
+    this.stopDepartmentVoiceIfNeeded();
+    this.clearDay0EndingUnknownNumberCallArmed();
+    this.stopDay0EndingUnknownNumberCall(false);
     this.activeConnectedAppointment = null;
     this.activeConnectedDepartmentKey = null;
     this.emergencyMode = false;
     this.emergencyStatusVisible = false;
+    this.day0EndingTelephoneStoryLock = false;
   }
 
   private drawPhonePanelScrim(): void {
@@ -402,7 +457,7 @@ export class TelephoneController extends Component {
       binding.button.interactable = interactable;
     }
     if (this.phonePanelCloseHitButton) {
-      this.phonePanelCloseHitButton.interactable = this.emergencyMode ? false : interactable;
+      this.phonePanelCloseHitButton.interactable = interactable;
     }
   }
 
@@ -434,16 +489,18 @@ export class TelephoneController extends Component {
       setInteractable: (interactable) => this.setPhonePanelInteractable(interactable),
     });
     this.phonePanelOpen = true;
-    this.setManagedButtonsInteractable(false);
     this.setEmergencyInputEnabled(true);
     if (this.phonePanelCloseHitButton) {
-      this.phonePanelCloseHitButton.interactable = false;
+      this.phonePanelCloseHitButton.interactable = true;
     }
     this.notifyEmergencyPhoneOpened();
     return true;
   }
 
   public closeEmergencyPhone(): void {
+    if (this.handleBlockedDay0EndingStoryCloseAttempt('close-emergency-phone')) {
+      return;
+    }
     if (this.phonePanelRuntime) {
       hideInteractivePanelImmediate(this.phonePanelRuntime, {
         setInteractable: (interactable) => this.setPhonePanelInteractable(interactable),
@@ -489,7 +546,7 @@ export class TelephoneController extends Component {
       this.phoneCallButton.interactable = enabled;
     }
     if (this.phonePanelCloseHitButton) {
-      this.phonePanelCloseHitButton.interactable = this.emergencyMode ? false : enabled;
+      this.phonePanelCloseHitButton.interactable = enabled;
     }
   }
 
@@ -539,16 +596,118 @@ export class TelephoneController extends Component {
     this.callSubmittedListeners.delete(listener);
   }
 
-  private handleTelephoneHitClick(): void {
-    if (!this.isInteractionAccessAllowed()) {
+  public startDay0EndingUnknownNumberCall(
+    lines: readonly string[],
+    onComplete?: () => void,
+  ): boolean {
+    if (!this.phonePanelRuntime) {
+      return false;
+    }
+    const normalizedLines = lines.map((line) => line.replace(/\r/g, ''));
+    if (normalizedLines.length === 0) {
+      return false;
+    }
+    if (!this.phonePanelOpen) {
+      this.openPhonePanel();
+    }
+    this.stopDay0EndingUnknownNumberCall(false);
+    this.day0EndingUnknownCallActive = true;
+    this.day0EndingUnknownCallLines = [...normalizedLines];
+    this.day0EndingUnknownCallLineIndex = -1;
+    this.day0EndingUnknownCallOnComplete = onComplete ?? null;
+    this.departmentCallSequenceSerial += 1;
+    this.cancelPendingDepartmentSequenceTimers();
+    this.stopDepartmentResponseTyping(true);
+    this.activeConnectedAppointment = null;
+    this.activeConnectedDepartmentKey = null;
+    this.phoneNumber = '';
+    this.setDepartmentResponseText('');
+    this.setDepartmentPhoneUiState('terminal-result');
+    this.setDay0EndingDialControlsInteractable(false);
+    if (this.phonePanelCloseHitButton) {
+      this.phonePanelCloseHitButton.interactable = false;
+    }
+    this.refreshPhoneNumberDisplay();
+    this.scheduleOnce(
+      this.advanceDay0EndingUnknownNumberLineAuto,
+      this.day0EndingUnknownCallInitialDelaySec,
+    );
+    return true;
+  }
+
+  public armDay0EndingUnknownNumberCall(
+    lines: readonly string[],
+    onComplete?: () => void,
+    onStart?: () => void,
+  ): boolean {
+    const normalizedLines = lines.map((line) => line.replace(/\r/g, ''));
+    if (normalizedLines.length === 0) {
+      return false;
+    }
+    this.day0EndingUnknownCallArmed = true;
+    this.day0EndingUnknownCallArmedLines = [...normalizedLines];
+    this.day0EndingUnknownCallOnComplete = onComplete ?? null;
+    this.day0EndingUnknownCallOnStart = onStart ?? null;
+    return true;
+  }
+
+  public clearDay0EndingUnknownNumberCallArmed(): void {
+    this.day0EndingUnknownCallArmed = false;
+    this.day0EndingUnknownCallArmedLines = [];
+    this.day0EndingUnknownCallOnStart = null;
+  }
+
+  public stopDay0EndingUnknownNumberCall(invokeComplete: boolean = false): void {
+    const completion = this.day0EndingUnknownCallOnComplete;
+    this.unschedule(this.advanceDay0EndingUnknownNumberLineAuto);
+    this.unschedule(this.closeDay0EndingUnknownNumberCallAfterDelay);
+    this.day0EndingUnknownCallActive = false;
+    this.day0EndingUnknownCallLines = [];
+    this.day0EndingUnknownCallLineIndex = -1;
+    this.day0EndingUnknownCallOnComplete = null;
+    this.day0EndingUnknownCallOnStart = null;
+    this.setDay0EndingDialControlsInteractable(true);
+    if (this.phonePanelCloseHitButton) {
+      this.phonePanelCloseHitButton.interactable = !this.day0EndingTelephoneStoryLock;
+    }
+    if (invokeComplete) {
+      completion?.();
+    }
+  }
+
+  public setDay0EndingTelephoneStoryLock(locked: boolean): void {
+    this.day0EndingTelephoneStoryLock = locked;
+    if (locked) {
+      this.recoverDay0EndingTelephoneStoryState('lock-enabled');
       return;
     }
-    if (!this.telephoneEntryEnabled) {
+    if (this.phonePanelCloseHitButton) {
+      this.phonePanelCloseHitButton.interactable = true;
+    }
+  }
+
+  private handleTelephoneHitClick(): void {
+    const employeeFilesController = this.getEmployeeFilesController();
+    if (employeeFilesController?.closeOpenDrawerForExternalInteraction(() => this.handleTelephoneHitClick())) {
       return;
     }
     if (this.emergencyMode) {
       console.info('[CarterEmergency] telephone entry accepted');
       this.openForEmergency();
+      return;
+    }
+    if (this.day0EndingUnknownCallArmed) {
+      const onStart = this.day0EndingUnknownCallOnStart;
+      const started = this.startDay0EndingUnknownNumberCall(
+        this.day0EndingUnknownCallArmedLines,
+        this.day0EndingUnknownCallOnComplete ?? undefined,
+      );
+      if (started) {
+        this.day0EndingUnknownCallArmed = false;
+        this.day0EndingUnknownCallArmedLines = [];
+        this.day0EndingUnknownCallOnStart = null;
+        onStart?.();
+      }
       return;
     }
     this.openPhonePanel();
@@ -574,14 +733,22 @@ export class TelephoneController extends Component {
 
   /** Player-clicked X on phone panel; play UI click then close. */
   private onPhonePanelCloseClick(): void {
+    if (this.handleBlockedDay0EndingStoryCloseAttempt('panel-close-button')) {
+      return;
+    }
     AudioManager.getInstance()?.playCachedSettingsClick();
     this.closePhonePanel();
   }
 
   private closePhonePanel(): void {
+    if (this.handleBlockedDay0EndingStoryCloseAttempt('close-phone-panel')) {
+      return;
+    }
     if (!this.phonePanelRuntime) {
       return;
     }
+    this.stopDay0EndingUnknownNumberCall(false);
+    this.cancelPendingStandardPhoneResultTimer();
     this.emergencyStatusVisible = false;
     this.activePhoneNumberLength = this.defaultPhoneNumberLength;
     this.restoreAllPhoneKeyVisualStates();
@@ -591,7 +758,9 @@ export class TelephoneController extends Component {
       this.phonePanelRuntime,
       () => {
         this.phonePanelOpen = false;
-        this.setManagedButtonsInteractable(true);
+        if (!this.emergencyMode) {
+          this.setManagedButtonsInteractable(true);
+        }
         this.refreshTelephoneAvailability();
       },
       {
@@ -601,14 +770,25 @@ export class TelephoneController extends Component {
   }
 
   private closePhonePanelImmediate(): void {
+    if (this.handleBlockedDay0EndingStoryCloseAttempt('close-phone-panel-immediate')) {
+      return;
+    }
     if (!this.phonePanelRuntime) {
       return;
     }
+    this.stopDay0EndingUnknownNumberCall(false);
+    this.cancelPendingStandardPhoneResultTimer();
+    this.emergencyStatusVisible = false;
+    this.activePhoneNumberLength = this.defaultPhoneNumberLength;
+    this.restoreAllPhoneKeyVisualStates();
+    this.resetDepartmentPhoneUiSession();
     hideInteractivePanelImmediate(this.phonePanelRuntime, {
       setInteractable: (interactable) => this.setPhonePanelInteractable(interactable),
     });
     this.phonePanelOpen = false;
-    this.setManagedButtonsInteractable(true);
+    if (!this.emergencyMode) {
+      this.setManagedButtonsInteractable(true);
+    }
     this.refreshTelephoneAvailability();
   }
 
@@ -752,6 +932,9 @@ export class TelephoneController extends Component {
   }
 
   private submitPhoneNumber(): void {
+    if (this.day0EndingUnknownCallActive) {
+      return;
+    }
     if (this.emergencyMode) {
       const submittedNumber = this.emergencyStatusVisible ? '' : this.phoneNumber;
       for (const listener of this.callSubmittedListeners) {
@@ -764,15 +947,84 @@ export class TelephoneController extends Component {
       return;
     }
     if (!this.isPhoneNumberValidForCurrentPhase()) {
-      this.closePhonePanel();
+      this.handleStandardPhoneCallSubmit();
       return;
     }
-    this.closePhonePanel();
+    this.handleStandardPhoneCallSubmit();
   }
 
   private isPhoneNumberValidForCurrentPhase(): boolean {
     return false;
   }
+
+  private handleStandardPhoneCallSubmit(): void {
+    const dialedNumber = this.phoneNumber;
+    const audioManager = AudioManager.getInstance();
+    this.cancelPendingStandardPhoneResultTimer();
+    const sequenceSerial = ++this.standardPhoneCallSequenceSerial;
+    this.pendingStandardPhoneResultSequenceSerial = sequenceSerial;
+    this.pendingStandardPhoneDialedNumber = dialedNumber;
+    audioManager?.playCachedPhoneDial();
+    const dialDelaySec = Math.max(
+      0.2,
+      audioManager?.getCachedClipDurationSeconds(GameAudioCatalog.PhoneDialId) ??
+        this.standardPhoneDialDelayFallbackSec,
+    );
+    this.scheduleOnce(this.onStandardPhoneDialDelayElapsed, dialDelaySec);
+  }
+
+  private resolveStandardPhoneResult(dialedNumber: string): string {
+    if (this.standardPhoneNoAnswerNumbers.has(dialedNumber)) {
+      return 'NO ANSWER.';
+    }
+    return 'NUMBER NOT IN SERVICE.';
+  }
+
+  private cancelPendingStandardPhoneResultTimer(): void {
+    this.unschedule(this.onStandardPhoneDialDelayElapsed);
+    this.unschedule(this.onStandardPhoneConnectedDelayElapsed);
+    this.pendingStandardPhoneResultSequenceSerial = -1;
+    this.pendingStandardPhoneDialedNumber = '';
+  }
+
+  private readonly onStandardPhoneDialDelayElapsed = (): void => {
+    const sequenceSerial = this.pendingStandardPhoneResultSequenceSerial;
+    if (
+      sequenceSerial < 0 ||
+      sequenceSerial !== this.standardPhoneCallSequenceSerial ||
+      !this.phonePanelOpen ||
+      !this.phoneNumberLabel
+    ) {
+      return;
+    }
+    const audioManager = AudioManager.getInstance();
+    audioManager?.playCachedPhoneConnected();
+    const connectedDelaySec = Math.max(
+      0.2,
+      audioManager?.getCachedClipDurationSeconds(GameAudioCatalog.PhoneConnectedId) ??
+        this.standardPhoneConnectedDelayFallbackSec,
+    );
+    this.unschedule(this.onStandardPhoneConnectedDelayElapsed);
+    this.scheduleOnce(this.onStandardPhoneConnectedDelayElapsed, connectedDelaySec);
+  }
+
+  private readonly onStandardPhoneConnectedDelayElapsed = (): void => {
+    const sequenceSerial = this.pendingStandardPhoneResultSequenceSerial;
+    const dialedNumber = this.pendingStandardPhoneDialedNumber;
+    this.pendingStandardPhoneResultSequenceSerial = -1;
+    this.pendingStandardPhoneDialedNumber = '';
+    if (
+      sequenceSerial < 0 ||
+      sequenceSerial !== this.standardPhoneCallSequenceSerial ||
+      !this.phonePanelOpen ||
+      !this.phoneNumberLabel
+    ) {
+      return;
+    }
+    const resultText = this.resolveStandardPhoneResult(dialedNumber);
+    this.phoneNumber = '';
+    this.phoneNumberLabel.string = resultText;
+  };
 
   private clearPhoneNumber(): void {
     this.phoneNumber = '';
@@ -783,6 +1035,10 @@ export class TelephoneController extends Component {
     if (!this.phoneNumberLabel) {
       return;
     }
+    if (this.day0EndingUnknownCallActive) {
+      this.phoneNumberLabel.string = 'UNKNOWN NUMBER';
+      return;
+    }
     if (this.emergencyStatusVisible) {
       this.phoneNumberLabel.string = this.phoneNumber;
       return;
@@ -791,7 +1047,15 @@ export class TelephoneController extends Component {
       this.phoneNumberLabel.string = this.phoneNumber;
       return;
     }
-    if (this.departmentPhoneUiState === 'question-menu' || this.departmentPhoneUiState === 'question-answer') {
+    if (this.departmentPhoneUiState === 'connecting') {
+      this.phoneNumberLabel.string = 'CONNECTING...';
+      return;
+    }
+    if (
+      this.departmentPhoneUiState === 'connected' ||
+      this.departmentPhoneUiState === 'question-menu' ||
+      this.departmentPhoneUiState === 'question-answer'
+    ) {
       this.phoneNumberLabel.string = 'CONNECTED';
       return;
     }
@@ -807,7 +1071,12 @@ export class TelephoneController extends Component {
       this.handleDepartmentContinuePressed();
       return;
     }
-    if (this.departmentPhoneUiState === 'question-menu' || this.departmentPhoneUiState === 'question-answer') {
+    if (
+      this.departmentPhoneUiState === 'connecting' ||
+      this.departmentPhoneUiState === 'connected' ||
+      this.departmentPhoneUiState === 'question-menu' ||
+      this.departmentPhoneUiState === 'question-answer'
+    ) {
       return;
     }
 
@@ -829,20 +1098,39 @@ export class TelephoneController extends Component {
     );
 
     if (result.kind === 'appointment-confirmed') {
+      this.persistDay4PhoneVerificationResult(context, {
+        checked: true,
+        calledNumber: result.dialedNumber,
+        departmentMatched: true,
+        appointmentFound: true,
+        visitorArrived: null,
+      });
       this.activeConnectedAppointment = result.appointment;
       this.activeConnectedDepartmentKey = result.departmentKey;
-      const departmentLabel = getAppointmentDepartmentLabel(result.departmentKey) ?? 'DEPARTMENT';
-      this.setDepartmentResponseText(`${departmentLabel} SPEAKING.`);
-      this.setDepartmentPhoneUiState('question-menu');
+      this.startDepartmentConnectSequence();
       return;
     }
 
     if (result.kind === 'unknown-number') {
+      this.persistDay4PhoneVerificationResult(context, {
+        checked: true,
+        calledNumber: result.dialedNumber,
+        departmentMatched: null,
+        appointmentFound: null,
+        visitorArrived: null,
+      });
       this.showTerminalResult('NUMBER NOT IN SERVICE.');
       return;
     }
 
     if (result.kind === 'no-answer') {
+      this.persistDay4PhoneVerificationResult(context, {
+        checked: true,
+        calledNumber: result.dialedNumber,
+        departmentMatched: false,
+        appointmentFound: false,
+        visitorArrived: null,
+      });
       this.showTerminalResult('NO ANSWER.');
       return;
     }
@@ -866,7 +1154,38 @@ export class TelephoneController extends Component {
     });
   }
 
+  private persistDay4PhoneVerificationResult(
+    context: DepartmentPhoneLookupContext,
+    result: PhoneVerificationResult,
+  ): void {
+    setDay4VisitorPhoneVerificationResult(context.rosterDay, context.activeVisitorKey, result);
+  }
+
+  private startDepartmentConnectSequence(): void {
+    const audioManager = AudioManager.getInstance();
+    const sequenceSerial = ++this.departmentCallSequenceSerial;
+    const connectedDelaySec = Math.max(
+      0.8,
+      audioManager?.getCachedClipDurationSeconds(GameAudioCatalog.PhoneConnectedId) ??
+        this.departmentConnectDelayFallbackSec,
+    );
+    const lineSpeakDurationSec = Math.max(
+      1.2,
+      audioManager?.getCachedClipDurationSeconds(GameAudioCatalog.AlienVoiceId) ??
+        this.departmentReplyDurationFallbackSec,
+    );
+    this.departmentReplyAutoAdvanceDelaySec = lineSpeakDurationSec;
+    this.clearDepartmentResponseText();
+    this.cancelPendingDepartmentSequenceTimers();
+    this.setDepartmentPhoneUiState('connecting');
+    audioManager?.playCachedPhoneConnected();
+    this.pendingDepartmentConnectSequenceSerial = sequenceSerial;
+    this.scheduleOnce(this.onDepartmentConnectDelayElapsed, connectedDelaySec);
+  }
+
   private showTerminalResult(message: string): void {
+    this.departmentCallSequenceSerial += 1;
+    this.cancelPendingDepartmentSequenceTimers();
     this.activeConnectedAppointment = null;
     this.activeConnectedDepartmentKey = null;
     this.setDepartmentResponseText(message);
@@ -877,11 +1196,21 @@ export class TelephoneController extends Component {
     this.departmentPhoneUiState = state;
     this.ensureDepartmentPhoneInquiryRuntime();
 
-    const isDialing = state === 'dialing';
+    const isConnecting = state === 'connecting';
+    const isConnected = state === 'connected';
     const isQuestionMenu = state === 'question-menu';
     const isQuestionAnswer = state === 'question-answer';
     const isTerminalResult = state === 'terminal-result';
-    const isInquiryVisible = isQuestionMenu || isQuestionAnswer || isTerminalResult;
+    const shouldShowResponseContinueHint =
+      !this.day0EndingUnknownCallActive && (isConnected || isQuestionAnswer || isTerminalResult);
+    const shouldShowResponsePanel =
+      (isConnected && !this.day0EndingUnknownCallActive) ||
+      (isConnecting && this.latestDepartmentResponseText.trim().length > 0) ||
+      isQuestionAnswer ||
+      (isTerminalResult &&
+        (!this.day0EndingUnknownCallActive || this.latestDepartmentResponseText.trim().length > 0));
+    const isInquiryVisible =
+      isConnecting || isConnected || isQuestionMenu || isQuestionAnswer || isTerminalResult;
 
     if (this.departmentPhoneInquiryRuntime?.isValid) {
       this.departmentPhoneInquiryRuntime.active = isInquiryVisible;
@@ -889,11 +1218,33 @@ export class TelephoneController extends Component {
     if (this.departmentQuestionMenuRoot?.isValid) {
       this.departmentQuestionMenuRoot.active = isQuestionMenu;
     }
+    if (this.departmentResponsePanel?.isValid) {
+      this.departmentResponsePanel.active = shouldShowResponsePanel;
+    }
     if (this.departmentContinueButtonNode?.isValid) {
-      this.departmentContinueButtonNode.active = isQuestionAnswer || isTerminalResult;
+      this.departmentContinueButtonNode.active = false;
+    }
+    if (this.departmentResponsePanelButton) {
+      this.departmentResponsePanelButton.interactable =
+        shouldShowResponseContinueHint && !this.day0EndingUnknownCallActive;
+    }
+    if (this.departmentResponseContinueHintNode?.isValid) {
+      this.departmentResponseContinueHintNode.active = shouldShowResponseContinueHint;
+    }
+    if (
+      shouldShowResponseContinueHint &&
+      this.departmentResponseLabel &&
+      !this.departmentResponseTyping &&
+      !this.day0EndingUnknownCallActive
+    ) {
+      const trimmed = this.departmentResponseLabel.string.trim();
+      if (trimmed.length === 0) {
+        this.departmentResponseLabel.string = this.latestDepartmentResponseText || 'Please continue.';
+      }
     }
 
-    this.setDialInputVisible(isDialing);
+    // Keep keypad visible in Day0 unknown call; only lock its interaction.
+    this.setDialInputVisible(true);
     this.refreshPhoneNumberDisplay();
   }
 
@@ -908,59 +1259,220 @@ export class TelephoneController extends Component {
   }
 
   private resetDepartmentPhoneUiSession(): void {
+    this.departmentCallSequenceSerial += 1;
+    this.cancelPendingDepartmentSequenceTimers();
+    this.stopDepartmentVoiceIfNeeded();
+    this.stopDepartmentResponseTyping(true);
     this.activeConnectedAppointment = null;
     this.activeConnectedDepartmentKey = null;
+    this.connectedGreetingLines = [];
+    this.connectedGreetingLineIndex = -1;
     this.phoneNumber = '';
     this.clearDepartmentResponseText();
     this.setDepartmentPhoneUiState('dialing');
   }
 
   private clearDepartmentResponseText(): void {
+    this.stopDepartmentResponseTyping(false);
+    this.latestDepartmentResponseText = '';
     if (this.departmentResponseLabel) {
       this.departmentResponseLabel.string = '';
     }
   }
 
   private setDepartmentResponseText(text: string): void {
+    this.stopDepartmentResponseTyping(false);
+    this.latestDepartmentResponseText = text;
     if (!this.departmentResponseLabel) {
       return;
     }
     this.departmentResponseLabel.string = text;
   }
 
+  private startDepartmentResponseTyping(text: string): void {
+    this.unschedule(this.stepDepartmentResponseTyping);
+    this.latestDepartmentResponseText = text;
+    this.departmentResponseTyping = true;
+    this.departmentResponseTypingFullText = text;
+    this.departmentResponseTypingLength = 0;
+    if (this.departmentResponseLabel) {
+      this.departmentResponseLabel.string = '';
+    }
+    if (text.length === 0) {
+      this.finishDepartmentResponseTyping();
+      return;
+    }
+    this.schedule(this.stepDepartmentResponseTyping, this.departmentResponseTypingIntervalSec);
+  }
+
+  private readonly stepDepartmentResponseTyping = (): void => {
+    if (!this.departmentResponseLabel) {
+      this.finishDepartmentResponseTyping();
+      return;
+    }
+    this.departmentResponseTypingLength += 1;
+    this.departmentResponseLabel.string = this.departmentResponseTypingFullText.slice(
+      0,
+      this.departmentResponseTypingLength,
+    );
+    if (this.departmentResponseTypingLength >= this.departmentResponseTypingFullText.length) {
+      this.finishDepartmentResponseTyping();
+    }
+  };
+
+  private finishDepartmentResponseTyping(): void {
+    this.unschedule(this.stepDepartmentResponseTyping);
+    this.departmentResponseTyping = false;
+    this.departmentResponseTypingLength = this.departmentResponseTypingFullText.length;
+    if (this.departmentResponseLabel) {
+      this.departmentResponseLabel.string = this.departmentResponseTypingFullText;
+    }
+  }
+
+  private stopDepartmentResponseTyping(clearText: boolean): void {
+    this.unschedule(this.stepDepartmentResponseTyping);
+    this.departmentResponseTyping = false;
+    this.departmentResponseTypingFullText = '';
+    this.departmentResponseTypingLength = 0;
+    if (clearText && this.departmentResponseLabel) {
+      this.departmentResponseLabel.string = '';
+    }
+  }
+
+  private readonly onDepartmentConnectDelayElapsed = (): void => {
+    const sequenceSerial = this.pendingDepartmentConnectSequenceSerial;
+    this.pendingDepartmentConnectSequenceSerial = -1;
+    if (
+      sequenceSerial < 0 ||
+      sequenceSerial !== this.departmentCallSequenceSerial ||
+      !this.phonePanelOpen ||
+      !this.activeConnectedDepartmentKey
+    ) {
+      return;
+    }
+    this.connectedGreetingLines = [...this.buildDepartmentGreetingLines(this.activeConnectedDepartmentKey)];
+    this.connectedGreetingLineIndex = -1;
+    this.setDepartmentPhoneUiState('connected');
+    this.advanceConnectedGreetingLine(sequenceSerial);
+  };
+
+  private readonly onDepartmentReplyDelayElapsed = (): void => {
+    const sequenceSerial = this.pendingDepartmentReplySequenceSerial;
+    this.pendingDepartmentReplySequenceSerial = -1;
+    if (
+      sequenceSerial < 0 ||
+      sequenceSerial !== this.departmentCallSequenceSerial ||
+      !this.phonePanelOpen ||
+      this.departmentPhoneUiState !== 'connected'
+    ) {
+      return;
+    }
+    if (this.departmentResponseTyping) {
+      this.finishDepartmentResponseTyping();
+    }
+    if (this.advanceConnectedGreetingLine(sequenceSerial)) {
+      return;
+    }
+    this.connectedGreetingLines = [];
+    this.connectedGreetingLineIndex = -1;
+    this.setDepartmentPhoneUiState('question-menu');
+  };
+
+  private advanceConnectedGreetingLine(sequenceSerial: number): boolean {
+    const nextLineIndex = this.connectedGreetingLineIndex + 1;
+    if (nextLineIndex < 0 || nextLineIndex >= this.connectedGreetingLines.length) {
+      return false;
+    }
+    const nextLine = this.connectedGreetingLines[nextLineIndex]?.trim() ?? '';
+    if (nextLine.length === 0) {
+      this.connectedGreetingLineIndex = nextLineIndex;
+      return this.advanceConnectedGreetingLine(sequenceSerial);
+    }
+    this.connectedGreetingLineIndex = nextLineIndex;
+    this.startDepartmentResponseTyping(nextLine);
+    AudioManager.getInstance()?.playCachedAlienVoice();
+    this.pendingDepartmentReplySequenceSerial = sequenceSerial;
+    this.unschedule(this.onDepartmentReplyDelayElapsed);
+    this.scheduleOnce(this.onDepartmentReplyDelayElapsed, this.departmentReplyAutoAdvanceDelaySec);
+    return true;
+  }
+
   private handleDepartmentQuestionSelected(questionKey: DepartmentPhoneQuestionKey): void {
+    if (questionKey === 'nothing-happened') {
+      this.resetDepartmentPhoneUiSession();
+      return;
+    }
+
     const appointment = this.activeConnectedAppointment;
     const departmentKey = this.activeConnectedDepartmentKey;
     if (!appointment || !departmentKey) {
-      this.showTerminalResult('APPOINTMENT RECORDS UNAVAILABLE.');
+      this.showTerminalResult('Sorry, the line is unstable. Please call again.');
       return;
     }
 
-    if (questionKey === 'expected-today') {
-      this.setDepartmentResponseText('YES. WE ARE EXPECTING A VISITOR TODAY.');
+    const context = this.departmentPhoneContextProvider?.() ?? null;
+    const visitorArrived = this.resolveAppointmentArrivalStatus(appointment);
+    if (context) {
+      this.persistDay4PhoneVerificationResult(context, {
+        checked: true,
+        calledNumber: this.phoneNumber,
+        departmentMatched: true,
+        appointmentFound: true,
+        visitorArrived,
+      });
+    }
+
+    if (visitorArrived === true) {
+      this.startDepartmentResponseTyping('YES. THE APPOINTMENT PERSON HAS ALREADY ARRIVED.');
+      AudioManager.getInstance()?.playCachedAlienVoice();
       this.setDepartmentPhoneUiState('question-answer');
       return;
     }
 
-    if (questionKey === 'expected-name') {
-      const visitorProfile = getVisitorProfile(appointment.visitorKey);
-      const displayName = visitorProfile?.displayName?.trim().toUpperCase() ?? 'THE SCHEDULED VISITOR';
-      this.setDepartmentResponseText(`WE ARE EXPECTING ${displayName} TODAY.`);
+    if (visitorArrived === false) {
+      this.startDepartmentResponseTyping('NO. THE APPOINTMENT PERSON HAS NOT ARRIVED YET.');
+      AudioManager.getInstance()?.playCachedAlienVoice();
       this.setDepartmentPhoneUiState('question-answer');
       return;
     }
 
-    const purposeLabel = getAppointmentPurposeLabel(appointment.purposeKey) ?? 'OFFICIAL BUSINESS';
-    this.setDepartmentResponseText(`THE VISIT IS FOR ${purposeLabel}.`);
+    const purposeLabel = getAppointmentPurposeLabel(appointment.purposeKey)?.toUpperCase() ?? 'OFFICIAL BUSINESS';
+    this.startDepartmentResponseTyping(
+      `WE CANNOT CONFIRM ARRIVAL RIGHT NOW.\nTHE APPOINTMENT IS FOR ${purposeLabel}.`,
+    );
+    AudioManager.getInstance()?.playCachedAlienVoice();
     this.setDepartmentPhoneUiState('question-answer');
   }
 
   private handleDepartmentContinuePressed(): void {
-    if (this.departmentPhoneUiState === 'question-answer') {
-      const departmentKey = this.activeConnectedDepartmentKey;
-      const departmentLabel = departmentKey ? getAppointmentDepartmentLabel(departmentKey) : null;
-      this.setDepartmentResponseText(`${departmentLabel ?? 'DEPARTMENT'} SPEAKING.`);
+    if (this.day0EndingUnknownCallActive) {
+      return;
+    }
+    if (this.departmentPhoneUiState === 'connecting') {
+      return;
+    }
+    if (this.departmentPhoneUiState === 'connected') {
+      const sequenceSerial = this.departmentCallSequenceSerial;
+      this.unschedule(this.onDepartmentReplyDelayElapsed);
+      this.pendingDepartmentReplySequenceSerial = -1;
+      if (this.departmentResponseTyping) {
+        this.finishDepartmentResponseTyping();
+        return;
+      }
+      if (this.advanceConnectedGreetingLine(sequenceSerial)) {
+        return;
+      }
+      this.connectedGreetingLines = [];
+      this.connectedGreetingLineIndex = -1;
       this.setDepartmentPhoneUiState('question-menu');
+      return;
+    }
+    if (this.departmentPhoneUiState === 'question-answer') {
+      if (this.departmentResponseTyping) {
+        this.finishDepartmentResponseTyping();
+        return;
+      }
+      this.resetDepartmentPhoneUiSession();
       return;
     }
     if (this.departmentPhoneUiState === 'terminal-result') {
@@ -968,8 +1480,14 @@ export class TelephoneController extends Component {
     }
   }
 
-  private handleDepartmentNeverMindPressed(): void {
-    this.resetDepartmentPhoneUiSession();
+  private resolveAppointmentArrivalStatus(appointment: AppointmentRosterEntry): boolean | null {
+    if (appointment.arrivalStatus === 'arrived') {
+      return true;
+    }
+    if (appointment.arrivalStatus === 'not_arrived') {
+      return false;
+    }
+    return null;
   }
 
   private ensureDepartmentPhoneInquiryRuntime(): void {
@@ -1000,36 +1518,64 @@ export class TelephoneController extends Component {
     if (!panel.parent) {
       runtimeRoot.addChild(panel);
     }
-    panel.setPosition(0, -365, 0);
+    panel.setPosition(0, -470, 0);
     const panelTransform = panel.getComponent(UITransform) ?? panel.addComponent(UITransform);
-    panelTransform.setContentSize(680, 128);
+    panelTransform.setContentSize(680, 110);
     const panelGraphics = panel.getComponent(Graphics) ?? panel.addComponent(Graphics);
     panelGraphics.clear();
-    panelGraphics.fillColor = new Color(20, 18, 16, 230);
-    panelGraphics.rect(-340, -64, 680, 128);
+    panelGraphics.fillColor = Color.WHITE;
+    panelGraphics.rect(-340, -55, 680, 110);
     panelGraphics.fill();
-    panelGraphics.lineWidth = 2;
-    panelGraphics.strokeColor = new Color(214, 206, 186, 255);
-    panelGraphics.rect(-340, -64, 680, 128);
+    panelGraphics.lineWidth = 4;
+    panelGraphics.strokeColor = Color.BLACK;
+    panelGraphics.rect(-340, -55, 680, 110);
     panelGraphics.stroke();
+    const panelButton = panel.getComponent(Button) ?? panel.addComponent(Button);
+    panelButton.target = panel;
+    panelButton.transition = Button.Transition.SCALE;
+    panelButton.zoomScale = 0.99;
+    panelButton.duration = 0.06;
+    this.departmentResponsePanelButton = panelButton;
 
-    const responseLabelNode = panel.getChildByName('DepartmentResponseLabel') ?? new Node('DepartmentResponseLabel');
+    const existingResponseLabelNode = panel.getChildByName('DepartmentResponseLabel');
+    const responseLabelNode = existingResponseLabelNode ?? new Node('DepartmentResponseLabel');
     if (!responseLabelNode.parent) {
       panel.addChild(responseLabelNode);
     }
-    responseLabelNode.setPosition(0, 0, 0);
+    responseLabelNode.setPosition(-8, 4, 0);
     const labelTransform = responseLabelNode.getComponent(UITransform) ?? responseLabelNode.addComponent(UITransform);
-    labelTransform.setContentSize(620, 96);
+    labelTransform.setContentSize(620, 72);
     const label = responseLabelNode.getComponent(Label) ?? responseLabelNode.addComponent(Label);
-    label.string = '';
-    label.fontSize = 24;
-    label.lineHeight = 30;
+    if (!this.departmentResponseTyping) {
+      label.string = this.latestDepartmentResponseText;
+    }
+    label.fontSize = 28;
+    label.lineHeight = 34;
     label.overflow = Label.Overflow.SHRINK;
     label.enableWrapText = true;
-    label.horizontalAlign = HorizontalTextAlignment.CENTER;
+    label.horizontalAlign = HorizontalTextAlignment.LEFT;
     label.verticalAlign = VerticalTextAlignment.CENTER;
-    label.color = new Color(235, 227, 208, 255);
+    label.color = Color.BLACK;
     this.departmentResponseLabel = label;
+
+    const hintNode = panel.getChildByName('DepartmentResponseContinueHint') ?? new Node('DepartmentResponseContinueHint');
+    if (!hintNode.parent) {
+      panel.addChild(hintNode);
+    }
+    hintNode.setPosition(228, -34, 0);
+    const hintTransform = hintNode.getComponent(UITransform) ?? hintNode.addComponent(UITransform);
+    hintTransform.setContentSize(220, 24);
+    const hintLabel = hintNode.getComponent(Label) ?? hintNode.addComponent(Label);
+    hintLabel.string = 'CLICK TO CONTINUE';
+    hintLabel.fontSize = 18;
+    hintLabel.lineHeight = 20;
+    hintLabel.overflow = Label.Overflow.SHRINK;
+    hintLabel.enableWrapText = false;
+    hintLabel.horizontalAlign = HorizontalTextAlignment.RIGHT;
+    hintLabel.verticalAlign = VerticalTextAlignment.CENTER;
+    hintLabel.color = new Color(96, 96, 96, 255);
+    hintNode.active = false;
+    this.departmentResponseContinueHintNode = hintNode;
     return panel;
   }
 
@@ -1043,10 +1589,22 @@ export class TelephoneController extends Component {
     const menuTransform = menuRoot.getComponent(UITransform) ?? menuRoot.addComponent(UITransform);
     menuTransform.setContentSize(560, 500);
 
-    this.ensureQuestionButton(menuRoot, 'ExpectedTodayButton', this.departmentQuestionPrompts['expected-today'], 138, 'expected-today');
-    this.ensureQuestionButton(menuRoot, 'ExpectedNameButton', this.departmentQuestionPrompts['expected-name'], 46, 'expected-name');
-    this.ensureQuestionButton(menuRoot, 'VisitPurposeButton', this.departmentQuestionPrompts['visit-purpose'], -46, 'visit-purpose');
+    this.ensureQuestionButton(
+      menuRoot,
+      'AskAppointmentArrivedButton',
+      this.departmentQuestionPrompts['ask-appointment-arrived'],
+      100,
+      'ask-appointment-arrived',
+    );
+    this.ensureQuestionButton(
+      menuRoot,
+      'NothingHappenedButton',
+      this.departmentQuestionPrompts['nothing-happened'],
+      8,
+      'nothing-happened',
+    );
     this.departmentNeverMindButtonNode = this.ensureMenuButtonNode(menuRoot, 'NeverMindButton', 'NEVER MIND.', -138);
+    this.departmentNeverMindButtonNode.active = false;
     this.departmentNeverMindButton = this.departmentNeverMindButtonNode.getComponent(Button) ?? null;
     return menuRoot;
   }
@@ -1077,13 +1635,32 @@ export class TelephoneController extends Component {
     y: number,
     questionKey: DepartmentPhoneQuestionKey,
   ): void {
-    const node = this.ensureMenuButtonNode(root, nodeName, labelText, y);
+    const node = this.ensureQuestionOptionNode(root, nodeName, labelText, y);
     const button = node.getComponent(Button) ?? null;
     if (!button) {
       return;
     }
     this.departmentQuestionButtonNodes.set(questionKey, node);
     this.departmentQuestionButtons.set(questionKey, button);
+  }
+
+  private ensureQuestionOptionNode(root: Node, nodeName: string, labelText: string, y: number): Node {
+    const node = root.getChildByName(nodeName) ?? new Node(nodeName);
+    if (!node.parent) {
+      root.addChild(node);
+    }
+    node.setPosition(0, y, 0);
+    const transform = node.getComponent(UITransform) ?? node.addComponent(UITransform);
+    transform.setContentSize(670, 64);
+    this.drawDepartmentQuestionOptionGraphics(node, 670, 64);
+
+    const button = node.getComponent(Button) ?? node.addComponent(Button);
+    button.target = node;
+    button.transition = Button.Transition.SCALE;
+    button.zoomScale = 0.97;
+    button.duration = 0.08;
+    this.ensureQuestionOptionLabel(node, labelText, 24);
+    return node;
   }
 
   private ensureMenuButtonNode(root: Node, nodeName: string, labelText: string, y: number): Node {
@@ -1118,6 +1695,20 @@ export class TelephoneController extends Component {
     graphics.stroke();
   }
 
+  private drawDepartmentQuestionOptionGraphics(node: Node, width: number, height: number): void {
+    const graphics = node.getComponent(Graphics) ?? node.addComponent(Graphics);
+    const halfWidth = width * 0.5;
+    const halfHeight = height * 0.5;
+    graphics.clear();
+    graphics.fillColor = new Color(247, 245, 239, 255);
+    graphics.rect(-halfWidth, -halfHeight, width, height);
+    graphics.fill();
+    graphics.lineWidth = 2;
+    graphics.strokeColor = new Color(25, 23, 20, 255);
+    graphics.rect(-halfWidth, -halfHeight, width, height);
+    graphics.stroke();
+  }
+
   private ensureButtonLabel(buttonNode: Node, text: string, fontSize: number): void {
     const labelNode = buttonNode.getChildByName('Label') ?? new Node('Label');
     if (!labelNode.parent) {
@@ -1138,51 +1729,100 @@ export class TelephoneController extends Component {
     label.color = new Color(239, 232, 216, 255);
   }
 
+  private ensureQuestionOptionLabel(buttonNode: Node, text: string, fontSize: number): void {
+    const labelNode = buttonNode.getChildByName('Label') ?? new Node('Label');
+    if (!labelNode.parent) {
+      buttonNode.addChild(labelNode);
+    }
+    labelNode.setPosition(0, 0, 0);
+    const transform = labelNode.getComponent(UITransform) ?? labelNode.addComponent(UITransform);
+    transform.setContentSize(620, 56);
+    const label = labelNode.getComponent(Label) ?? labelNode.addComponent(Label);
+    label.string = text;
+    label.fontSize = fontSize;
+    label.lineHeight = 28;
+    label.overflow = Label.Overflow.CLAMP;
+    label.enableWrapText = true;
+    label.horizontalAlign = HorizontalTextAlignment.CENTER;
+    label.verticalAlign = VerticalTextAlignment.CENTER;
+    label.color = new Color(25, 23, 20, 255);
+  }
+
+  private buildDepartmentGreetingLines(departmentKey: AppointmentDepartmentKey): readonly [string, string] {
+    if (departmentKey === 'research') {
+      return ['Hello, this is the Research Department.', 'How can I help you?'];
+    }
+    if (departmentKey === 'production') {
+      return ['Hello, this is the Production Department.', 'How can I help you?'];
+    }
+    return ['Hello, this is the Sales Department.', 'How can I help you?'];
+  }
+
+  private cancelPendingDepartmentSequenceTimers(): void {
+    this.unschedule(this.onDepartmentConnectDelayElapsed);
+    this.unschedule(this.onDepartmentReplyDelayElapsed);
+    this.pendingDepartmentConnectSequenceSerial = -1;
+    this.pendingDepartmentReplySequenceSerial = -1;
+    this.connectedGreetingLines = [];
+    this.connectedGreetingLineIndex = -1;
+  }
+
+  private stopDepartmentVoiceIfNeeded(): void {
+    if (
+      this.departmentPhoneUiState === 'connecting' ||
+      this.departmentPhoneUiState === 'connected' ||
+      this.departmentPhoneUiState === 'question-menu' ||
+      this.departmentPhoneUiState === 'question-answer'
+    ) {
+      AudioManager.getInstance()?.stopVoice();
+    }
+  }
+
   private bindDepartmentInquiryButtonsOnce(): void {
     if (this.departmentInquiryBindings.length > 0) {
       return;
     }
 
-    const expectedTodayButton = this.departmentQuestionButtons.get('expected-today');
-    const expectedNameButton = this.departmentQuestionButtons.get('expected-name');
-    const visitPurposeButton = this.departmentQuestionButtons.get('visit-purpose');
+    const askArrivedButton = this.departmentQuestionButtons.get('ask-appointment-arrived');
+    const nothingHappenedButton = this.departmentQuestionButtons.get('nothing-happened');
 
-    if (expectedTodayButton) {
+    if (askArrivedButton) {
       this.departmentInquiryBindings.push({
-        button: expectedTodayButton,
-        callback: () => this.handleDepartmentQuestionSelected('expected-today'),
+        button: askArrivedButton,
+        callback: () => this.handleDepartmentQuestionSelected('ask-appointment-arrived'),
       });
     }
-    if (expectedNameButton) {
+    if (nothingHappenedButton) {
       this.departmentInquiryBindings.push({
-        button: expectedNameButton,
-        callback: () => this.handleDepartmentQuestionSelected('expected-name'),
+        button: nothingHappenedButton,
+        callback: () => this.handleDepartmentQuestionSelected('nothing-happened'),
       });
     }
-    if (visitPurposeButton) {
+    if (this.departmentResponsePanelButton) {
       this.departmentInquiryBindings.push({
-        button: visitPurposeButton,
-        callback: () => this.handleDepartmentQuestionSelected('visit-purpose'),
-      });
-    }
-    if (this.departmentNeverMindButton) {
-      this.departmentInquiryBindings.push({
-        button: this.departmentNeverMindButton,
-        callback: () => this.handleDepartmentNeverMindPressed(),
-      });
-    }
-    if (this.departmentContinueButton) {
-      this.departmentInquiryBindings.push({
-        button: this.departmentContinueButton,
+        button: this.departmentResponsePanelButton,
         callback: () => this.handleDepartmentContinuePressed(),
       });
     }
   }
 
   private setManagedButtonsInteractable(interactable: boolean): void {
-    for (const button of this.managedButtons) {
+    for (const button of this.getManagedButtonsSafe()) {
       button.interactable = interactable;
     }
+  }
+
+  private getManagedButtonsSafe(): Button[] {
+    if (Array.isArray(this.managedButtons)) {
+      return this.managedButtons;
+    }
+    if (!this.managedButtonsShapeWarningLogged) {
+      this.managedButtonsShapeWarningLogged = true;
+      console.warn('[TelephoneController] managedButtons has unexpected runtime shape.', {
+        runtimeType: typeof this.managedButtons,
+      });
+    }
+    return [];
   }
 
   private isInteractionAccessAllowed(): boolean {
@@ -1197,13 +1837,10 @@ export class TelephoneController extends Component {
       this.telephoneVisualNode.active = true;
     }
     if (this.telephoneHitNode?.isValid) {
-      this.telephoneHitNode.active = interactionAllowed;
+      this.telephoneHitNode.active = true;
     }
     if (this.telephoneHitButton?.node?.isValid) {
-      this.telephoneHitButton.interactable = interactionAllowed;
-    }
-    if (!panelAvailability && !this.emergencyMode && this.phonePanelOpen) {
-      this.closePhonePanelImmediate();
+      this.telephoneHitButton.interactable = true;
     }
   }
 
@@ -1211,6 +1848,113 @@ export class TelephoneController extends Component {
     console.info('[CarterEmergency] emergency phone opened');
     for (const listener of this.emergencyPhoneOpenedListeners) {
       listener();
+    }
+  }
+
+  private getEmployeeFilesController(): EmployeeFilesController | null {
+    const deskEvidenceRuntime = this.node.parent;
+    const employeeDrawersClosedRuntime = deskEvidenceRuntime?.getChildByName('EmployeeDrawersClosedRuntime') ?? null;
+    return employeeDrawersClosedRuntime?.getComponent(EmployeeFilesController) ?? null;
+  }
+
+  private finishDay0EndingUnknownNumberCall(): void {
+    // Final line should hold briefly, then auto-close the phone panel.
+    this.unschedule(this.closeDay0EndingUnknownNumberCallAfterDelay);
+    this.scheduleOnce(
+      this.closeDay0EndingUnknownNumberCallAfterDelay,
+      this.day0EndingUnknownCallFinalCloseDelaySec,
+    );
+  }
+
+  private readonly advanceDay0EndingUnknownNumberLineAuto = (): void => {
+    if (!this.day0EndingUnknownCallActive) {
+      return;
+    }
+    const nextIndex = this.day0EndingUnknownCallLineIndex + 1;
+    if (nextIndex >= this.day0EndingUnknownCallLines.length) {
+      this.finishDay0EndingUnknownNumberCall();
+      return;
+    }
+    this.day0EndingUnknownCallLineIndex = nextIndex;
+    const text = this.day0EndingUnknownCallLines[nextIndex] ?? '';
+    this.setDepartmentResponseText(text);
+    this.setDepartmentPhoneUiState('terminal-result');
+    this.refreshPhoneNumberDisplay();
+    const lastIndex = this.day0EndingUnknownCallLines.length - 1;
+    if (text.trim().length > 0 && (nextIndex === 0 || nextIndex === 2)) {
+      AudioManager.getInstance()?.playVoice(VoiceId.AlienSpeech01);
+    }
+    if (nextIndex >= lastIndex) {
+      this.finishDay0EndingUnknownNumberCall();
+      return;
+    }
+    this.unschedule(this.advanceDay0EndingUnknownNumberLineAuto);
+    this.scheduleOnce(this.advanceDay0EndingUnknownNumberLineAuto, this.day0EndingUnknownCallLineDelaySec);
+  };
+
+  private readonly closeDay0EndingUnknownNumberCallAfterDelay = (): void => {
+    if (!this.day0EndingUnknownCallActive) {
+      return;
+    }
+    this.stopDay0EndingUnknownNumberCall(true);
+    this.closePhonePanel();
+  };
+
+  private handleBlockedDay0EndingStoryCloseAttempt(source: string): boolean {
+    if (!this.day0EndingTelephoneStoryLock) {
+      return false;
+    }
+    this.recoverDay0EndingTelephoneStoryState(source);
+    return true;
+  }
+
+  private recoverDay0EndingTelephoneStoryState(source: string): void {
+    if (!this.day0EndingTelephoneStoryLock || !this.phonePanelRuntime) {
+      return;
+    }
+    if (!this.phonePanelOpen) {
+      this.openPhonePanel();
+    }
+    if (!this.day0EndingUnknownCallActive) {
+      return;
+    }
+    const currentLine = this.day0EndingUnknownCallLines[this.day0EndingUnknownCallLineIndex] ?? '';
+    this.setDepartmentResponseText(currentLine);
+    this.setDepartmentPhoneUiState('terminal-result');
+    this.setDay0EndingDialControlsInteractable(false);
+    if (this.phonePanelCloseHitButton) {
+      this.phonePanelCloseHitButton.interactable = false;
+    }
+    this.refreshPhoneNumberDisplay();
+    console.info('[TelephoneController] Day0 ending story close blocked.', {
+      source,
+      lineIndex: this.day0EndingUnknownCallLineIndex,
+    });
+  }
+
+  private configurePhoneNumberLabelLayout(): void {
+    if (!this.phoneNumberLabel) {
+      return;
+    }
+    this.phoneNumberLabel.overflow = Label.Overflow.SHRINK;
+    this.phoneNumberLabel.enableWrapText = false;
+    this.phoneNumberLabel.horizontalAlign = HorizontalTextAlignment.RIGHT;
+    this.phoneNumberLabel.verticalAlign = VerticalTextAlignment.CENTER;
+    if (this.phoneNumberLabel.fontSize > 32) {
+      this.phoneNumberLabel.fontSize = 32;
+    }
+    this.phoneNumberLabel.lineHeight = this.phoneNumberLabel.fontSize + 2;
+  }
+
+  private setDay0EndingDialControlsInteractable(interactable: boolean): void {
+    for (const binding of this.keypadButtonBindings) {
+      binding.button.interactable = interactable;
+    }
+    if (this.phoneHashBackspaceButton) {
+      this.phoneHashBackspaceButton.interactable = interactable;
+    }
+    if (this.phoneCallButton) {
+      this.phoneCallButton.interactable = interactable;
     }
   }
 }

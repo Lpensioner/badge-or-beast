@@ -25,6 +25,7 @@ import {
   showInteractivePanel,
 } from './InteractivePanelTransition';
 import { AudioManager } from '../audio/AudioManager';
+import { EmployeeFilesController } from './EmployeeFilesController';
 
 const { ccclass } = _decorator;
 
@@ -39,8 +40,17 @@ const ENTRY_POSITIONS = [
 const EMPTY_STATE_POSITION = { x: 38, y: 50 };
 
 const ENTRY_SIZE = new Size(500, 300);
-const PORTRAIT_FRAME_SIZE = new Size(126, 190);
-const PORTRAIT_VISUAL_MAX_SIZE = new Size(112, 174);
+const PORTRAIT_FRAME_SIZE = new Size(150, 222);
+const PORTRAIT_VISUAL_MAX_SIZE = new Size(144, 214);
+const ENTRY_PORTRAIT_CENTER_X = -168;
+const ENTRY_PORTRAIT_CENTER_Y = -18;
+const ENTRY_TEXT_LEFT_X = -12;
+const ENTRY_TEXT_RIGHT_X = 246;
+const CLOSE_HITBOX_SIZE = new Size(46, 46);
+const CLOSE_HITBOX_INSET = { x: 50, y: 48 } as const;
+const APPEARANCE_TOP_Y = 88;
+const DETAIL_GAP_Y = 10;
+const ENTRY_DETAIL_BOTTOM_Y = -144;
 
 interface EntryRuntimeNodes {
   readonly root: Node;
@@ -165,7 +175,7 @@ export class AppointmentRosterController extends Component {
     this.appointmentRosterPanelRuntime!.active = false;
     this.rosterPanelOpen = false;
     this.drawScrim();
-    this.drawCloseButton();
+    this.configureCloseButtonHotspot();
     this.ensureRuntimeTree();
     this.refreshRosterView();
   }
@@ -177,7 +187,7 @@ export class AppointmentRosterController extends Component {
 
   onDisable(): void {
     this.appointmentRosterHitButton?.node.off(Button.EventType.CLICK, this.openAppointmentRoster, this);
-    this.appointmentRosterCloseButtonComp?.node.off(Button.EventType.CLICK, this.closeAppointmentRoster, this);
+    this.appointmentRosterCloseButtonComp?.node.off(Button.EventType.CLICK, this.onAppointmentRosterCloseClick, this);
     this.invalidateRosterRenderGeneration();
   }
 
@@ -202,6 +212,11 @@ export class AppointmentRosterController extends Component {
     if (!this.campaignEnabled || this.rosterPanelOpen || !this.appointmentRosterPanelRuntime) {
       return;
     }
+    const employeeFilesController = this.getEmployeeFilesController();
+    if (employeeFilesController?.closeOpenDrawerForExternalInteraction(() => this.openAppointmentRoster())) {
+      return;
+    }
+    this.alignCloseHotspotToPanelBody();
     showInteractivePanel(this.appointmentRosterPanelRuntime, {
       setInteractable: (interactable) => this.setRosterPanelInteractable(interactable),
     });
@@ -293,8 +308,8 @@ export class AppointmentRosterController extends Component {
     if (!this.rosterDateLabel || !this.emptyStateLabel) {
       return;
     }
-    this.rosterDateLabel.node.active = true;
-    this.rosterDateLabel.string = this.rosterDay.inspectionDate;
+    this.rosterDateLabel.node.active = false;
+    this.rosterDateLabel.string = '';
     this.emptyStateLabel.node.active = false;
 
     for (let i = 0; i < this.entryRuntimeNodes.length; i += 1) {
@@ -328,18 +343,44 @@ export class AppointmentRosterController extends Component {
     this.appointmentRosterScrimGraphics.fill();
   }
 
-  private drawCloseButton(): void {
-    if (!this.appointmentRosterCloseButtonGraphics) {
+  private configureCloseButtonHotspot(): void {
+    if (!this.appointmentRosterCloseButton) {
       return;
     }
-    this.appointmentRosterCloseButtonGraphics.clear();
-    this.appointmentRosterCloseButtonGraphics.fillColor = new Color(25, 23, 20, 255);
-    this.appointmentRosterCloseButtonGraphics.rect(-36, -36, 72, 72);
-    this.appointmentRosterCloseButtonGraphics.fill();
-    this.appointmentRosterCloseButtonGraphics.lineWidth = 3;
-    this.appointmentRosterCloseButtonGraphics.strokeColor = new Color(230, 220, 195, 255);
-    this.appointmentRosterCloseButtonGraphics.rect(-36, -36, 72, 72);
-    this.appointmentRosterCloseButtonGraphics.stroke();
+    const closeTransform =
+      this.appointmentRosterCloseButton.getComponent(UITransform) ?? this.appointmentRosterCloseButton.addComponent(UITransform);
+    closeTransform.setAnchorPoint(0.5, 0.5);
+    closeTransform.setContentSize(CLOSE_HITBOX_SIZE);
+
+    if (this.appointmentRosterCloseButtonGraphics) {
+      this.appointmentRosterCloseButtonGraphics.clear();
+      this.appointmentRosterCloseButtonGraphics.enabled = false;
+    }
+
+    const closeVisualNode = this.appointmentRosterCloseButton.getChildByName('CloseLabel');
+    if (closeVisualNode) {
+      closeVisualNode.active = false;
+    }
+
+    this.alignCloseHotspotToPanelBody();
+  }
+
+  private alignCloseHotspotToPanelBody(): void {
+    if (!this.appointmentRosterCloseButton || !this.appointmentRosterPanelBody) {
+      return;
+    }
+    const panelBodyTransform = this.appointmentRosterPanelBody.getComponent(UITransform);
+    if (!panelBodyTransform) {
+      return;
+    }
+    const halfWidth = panelBodyTransform.contentSize.width / 2;
+    const halfHeight = panelBodyTransform.contentSize.height / 2;
+    const panelBodyPos = this.appointmentRosterPanelBody.position;
+    this.appointmentRosterCloseButton.setPosition(
+      panelBodyPos.x + halfWidth - CLOSE_HITBOX_INSET.x,
+      panelBodyPos.y + halfHeight - CLOSE_HITBOX_INSET.y,
+      0,
+    );
   }
 
   private ensureRuntimeTree(): boolean {
@@ -421,11 +462,22 @@ export class AppointmentRosterController extends Component {
     const backgroundGraphics = backgroundNode.getComponent(Graphics) ?? backgroundNode.addComponent(Graphics);
     this.drawEntryBackground(backgroundGraphics);
 
-    const portraitFrameNode = this.ensureNode(root, 'PortraitFrame', PORTRAIT_FRAME_SIZE, { x: -175, y: 0 });
+    const portraitCenterX = ENTRY_PORTRAIT_CENTER_X;
+    const textColumnLeftX = ENTRY_TEXT_LEFT_X;
+    const textColumnRightX = ENTRY_TEXT_RIGHT_X;
+    const textColumnWidth = Math.max(180, textColumnRightX - textColumnLeftX);
+
+    const portraitFrameNode = this.ensureNode(root, 'PortraitFrame', PORTRAIT_FRAME_SIZE, {
+      x: portraitCenterX,
+      y: ENTRY_PORTRAIT_CENTER_Y,
+    });
     const portraitFrameGraphics = portraitFrameNode.getComponent(Graphics) ?? portraitFrameNode.addComponent(Graphics);
     this.drawPortraitFrame(portraitFrameGraphics);
 
-    const portraitVisualNode = this.ensureNode(root, 'PortraitVisual', PORTRAIT_VISUAL_MAX_SIZE, { x: -175, y: 0 });
+    const portraitVisualNode = this.ensureNode(root, 'PortraitVisual', PORTRAIT_VISUAL_MAX_SIZE, {
+      x: portraitCenterX,
+      y: ENTRY_PORTRAIT_CENTER_Y,
+    });
     const portraitVisualTransform =
       portraitVisualNode.getComponent(UITransform) ?? portraitVisualNode.addComponent(UITransform);
     portraitVisualTransform.setAnchorPoint(0.5, 0.5);
@@ -441,26 +493,43 @@ export class AppointmentRosterController extends Component {
       staleTimeLabelNode.destroy();
     }
 
-    const nameLabelNode = this.ensureNode(root, 'NameLabel', new Size(310, 42), { x: -20, y: 100 });
-    const departmentLabelNode = this.ensureNode(root, 'DepartmentLabel', new Size(310, 40), { x: -20, y: 52 });
-    const appearanceLabelNode = this.ensureNode(root, 'AppearanceLabel', new Size(310, 82), { x: -20, y: -10 });
-    const purposeLabelNode = this.ensureNode(root, 'PurposeLabel', new Size(310, 76), { x: -20, y: -88 });
+    const nameLabelNode = this.ensureNode(root, 'NameLabel', new Size(488, 42), {
+      x: -246,
+      y: 140,
+    });
+    const departmentLabelNode = this.ensureNode(root, 'DepartmentLabel', new Size(textColumnWidth, 52), {
+      x: textColumnLeftX,
+      y: 140,
+    });
+    const appearanceLabelNode = this.ensureNode(root, 'AppearanceLabel', new Size(textColumnWidth, 126), {
+      x: textColumnLeftX,
+      y: 88,
+    });
+    const purposeLabelNode = this.ensureNode(root, 'PurposeLabel', new Size(textColumnWidth, 84), {
+      x: textColumnLeftX,
+      y: -62,
+    });
+
+    this.setTopLeftLabelAnchor(nameLabelNode);
+    this.setTopLeftLabelAnchor(departmentLabelNode);
+    this.setTopLeftLabelAnchor(appearanceLabelNode);
+    this.setTopLeftLabelAnchor(purposeLabelNode);
 
     const nameLabel = this.setupLabel(nameLabelNode, {
-      fontSize: 34,
+      fontSize: 36,
       horizontalAlign: HorizontalTextAlignment.LEFT,
-      verticalAlign: VerticalTextAlignment.CENTER,
+      verticalAlign: VerticalTextAlignment.TOP,
       color: new Color(26, 26, 26, 255),
-      lineHeight: 36,
+      lineHeight: 40,
       wrap: false,
     });
     const departmentLabel = this.setupLabel(departmentLabelNode, {
-      fontSize: 24,
+      fontSize: 21,
       horizontalAlign: HorizontalTextAlignment.LEFT,
-      verticalAlign: VerticalTextAlignment.CENTER,
+      verticalAlign: VerticalTextAlignment.TOP,
       color: new Color(34, 34, 34, 255),
-      lineHeight: 27,
-      wrap: false,
+      lineHeight: 25,
+      wrap: true,
     });
     const appearanceLabel = this.setupLabel(appearanceLabelNode, {
       fontSize: 21,
@@ -508,6 +577,11 @@ export class AppointmentRosterController extends Component {
     return node;
   }
 
+  private setTopLeftLabelAnchor(node: Node): void {
+    const transform = node.getComponent(UITransform) ?? node.addComponent(UITransform);
+    transform.setAnchorPoint(0, 1);
+  }
+
   private setupLabel(
     node: Node,
     config: {
@@ -552,15 +626,6 @@ export class AppointmentRosterController extends Component {
       PORTRAIT_FRAME_SIZE.height,
     );
     graphics.fill();
-    graphics.lineWidth = 2;
-    graphics.strokeColor = new Color(28, 28, 28, 190);
-    graphics.rect(
-      -PORTRAIT_FRAME_SIZE.width / 2,
-      -PORTRAIT_FRAME_SIZE.height / 2,
-      PORTRAIT_FRAME_SIZE.width,
-      PORTRAIT_FRAME_SIZE.height,
-    );
-    graphics.stroke();
   }
 
   private renderEntry(runtime: EntryRuntimeNodes, entry: AppointmentRosterEntry, generation: number): void {
@@ -582,6 +647,7 @@ export class AppointmentRosterController extends Component {
       runtime.departmentLabel.string = 'DEPARTMENT: DATA ERROR';
       runtime.appearanceLabel.string = 'APPEARANCE:\nDATA ERROR';
       runtime.purposeLabel.string = 'PURPOSE:\nDATA ERROR';
+      this.layoutDetailLabels(runtime);
       return;
     }
 
@@ -594,6 +660,7 @@ export class AppointmentRosterController extends Component {
       runtime.departmentLabel.string = 'DEPARTMENT: DATA ERROR';
       runtime.appearanceLabel.string = `APPEARANCE:\n${this.formatAppearanceFeatures(profile.appearanceFeatures)}`;
       runtime.purposeLabel.string = 'PURPOSE:\nDATA ERROR';
+      this.layoutDetailLabels(runtime);
       return;
     }
 
@@ -606,6 +673,7 @@ export class AppointmentRosterController extends Component {
       runtime.departmentLabel.string = `DEPARTMENT: ${departmentLabel}`;
       runtime.appearanceLabel.string = `APPEARANCE:\n${this.formatAppearanceFeatures(profile.appearanceFeatures)}`;
       runtime.purposeLabel.string = 'PURPOSE:\nDATA ERROR';
+      this.layoutDetailLabels(runtime);
       return;
     }
 
@@ -613,6 +681,7 @@ export class AppointmentRosterController extends Component {
     runtime.departmentLabel.string = `DEPARTMENT: ${departmentLabel}`;
     runtime.appearanceLabel.string = `APPEARANCE:\n${this.formatAppearanceFeatures(profile.appearanceFeatures)}`;
     runtime.purposeLabel.string = `PURPOSE:\n${purposeLabel}`;
+    this.layoutDetailLabels(runtime);
 
     this.applyPortraitSpriteFrame(
       runtime,
@@ -621,6 +690,69 @@ export class AppointmentRosterController extends Component {
       entry.appointmentId,
       entry.visitorKey,
     );
+  }
+
+  /**
+   * Dynamically place appearance/purpose blocks to prevent overlap for long texts.
+   */
+  private layoutDetailLabels(runtime: EntryRuntimeNodes): void {
+    const appearanceTransform = runtime.appearanceLabel.node.getComponent(UITransform);
+    const purposeTransform = runtime.purposeLabel.node.getComponent(UITransform);
+    if (!appearanceTransform || !purposeTransform) {
+      return;
+    }
+
+    const availableHeight = APPEARANCE_TOP_Y - ENTRY_DETAIL_BOTTOM_Y;
+
+    const appearanceLineCount = this.estimateWrappedLineCount(
+      runtime.appearanceLabel.string,
+      runtime.appearanceLabel.fontSize,
+      appearanceTransform.contentSize.width,
+    );
+    const purposeLineCount = this.estimateWrappedLineCount(
+      runtime.purposeLabel.string,
+      runtime.purposeLabel.fontSize,
+      purposeTransform.contentSize.width,
+    );
+
+    const appearanceNeeded = Math.max(84, appearanceLineCount * runtime.appearanceLabel.lineHeight + 6);
+    const purposeNeeded = Math.max(72, purposeLineCount * runtime.purposeLabel.lineHeight + 6);
+    const totalNeeded = appearanceNeeded + DETAIL_GAP_Y + purposeNeeded;
+
+    // Prioritize full PURPOSE visibility, then allocate remaining space to APPEARANCE.
+    const purposeHeight = Math.min(
+      purposeNeeded,
+      Math.max(72, availableHeight - DETAIL_GAP_Y - 72),
+    );
+    const appearanceHeight =
+      totalNeeded <= availableHeight
+        ? appearanceNeeded
+        : Math.max(72, availableHeight - DETAIL_GAP_Y - purposeHeight);
+
+    appearanceTransform.setContentSize(appearanceTransform.contentSize.width, appearanceHeight);
+    runtime.appearanceLabel.node.setPosition(runtime.appearanceLabel.node.position.x, APPEARANCE_TOP_Y, 0);
+
+    const purposeTopY = APPEARANCE_TOP_Y - appearanceHeight - DETAIL_GAP_Y;
+    const clampedPurposeHeight = Math.max(72, Math.min(purposeHeight, purposeTopY - ENTRY_DETAIL_BOTTOM_Y));
+    purposeTransform.setContentSize(purposeTransform.contentSize.width, clampedPurposeHeight);
+    runtime.purposeLabel.node.setPosition(runtime.purposeLabel.node.position.x, purposeTopY, 0);
+  }
+
+  private estimateWrappedLineCount(text: string, fontSize: number, width: number): number {
+    const normalized = text.replace(/\r/g, '');
+    const rows = normalized.split('\n');
+    const approxCharWidth = Math.max(1, fontSize * 0.68);
+    const maxCharsPerLine = Math.max(6, Math.floor(width / approxCharWidth));
+    let lineCount = 0;
+    for (const row of rows) {
+      const rowLength = row.trim().length;
+      if (rowLength === 0) {
+        lineCount += 1;
+      } else {
+        lineCount += Math.max(1, Math.ceil(rowLength / maxCharsPerLine));
+      }
+    }
+    return Math.max(1, lineCount);
   }
 
   private showStatusOnly(message: string): void {
@@ -738,5 +870,11 @@ export class AppointmentRosterController extends Component {
   private invalidateRosterRenderGeneration(): number {
     this.rosterRenderGeneration += 1;
     return this.rosterRenderGeneration;
+  }
+
+  private getEmployeeFilesController(): EmployeeFilesController | null {
+    const deskEvidenceRuntime = this.node.parent;
+    const employeeDrawersClosedRuntime = deskEvidenceRuntime?.getChildByName('EmployeeDrawersClosedRuntime') ?? null;
+    return employeeDrawersClosedRuntime?.getComponent(EmployeeFilesController) ?? null;
   }
 }

@@ -11,6 +11,7 @@ export enum AudioCategory {
 
 export enum MusicId {
   BgmTenseAmbientLoop = 'bgm_tense_ambient_loop',
+  BgmDay0IdentityRevealStaticHallway = 'bgm_day0_identity_reveal_static_hallway',
 }
 
 export enum VoiceId {
@@ -20,10 +21,12 @@ export enum VoiceId {
 
 export enum SoundEffectId {
   HammerHit01 = 'sfx_hammer_hit_01',
+  MonsterDisguiseRevealRoar01 = 'sfx_monster_disguise_reveal_roar_01',
   DecisionMark01 = 'sfx_decision_mark_01',
   UiSettingsClick01 = 'sfx_ui_settings_click_01',
   PhoneDial01 = 'sfx_phone_dial_01',
   PhoneConnected01 = 'sfx_phone_connected_01',
+  PhoneRingDay0UnknownNumber01 = 'sfx_phone_ring_day0_unknown_number',
   DocumentFlip01 = 'sfx_document_flip_01',
   Alarm01 = 'sfx_alarm_01',
   ShutterClose01 = 'sfx_shutter_close_01',
@@ -47,6 +50,11 @@ const AUDIO_ENTRIES: readonly AudioEntry[] = [
     path: 'audio/music/bgm_tense_ambient_loop',
   },
   {
+    id: MusicId.BgmDay0IdentityRevealStaticHallway,
+    category: AudioCategory.Music,
+    path: 'audio/music/bgm_day0_identity_reveal_static_hallway',
+  },
+  {
     id: VoiceId.AlienSpeech01,
     category: AudioCategory.Voice,
     path: 'audio/voice/voice_alien_speech_01',
@@ -60,6 +68,11 @@ const AUDIO_ENTRIES: readonly AudioEntry[] = [
     id: SoundEffectId.HammerHit01,
     category: AudioCategory.SoundEffect,
     path: 'audio/sfx/sfx_hammer_hit_01',
+  },
+  {
+    id: SoundEffectId.MonsterDisguiseRevealRoar01,
+    category: AudioCategory.SoundEffect,
+    path: 'audio/sfx/sfx_monster_disguise_reveal_roar_01',
   },
   {
     id: SoundEffectId.DecisionMark01,
@@ -80,6 +93,11 @@ const AUDIO_ENTRIES: readonly AudioEntry[] = [
     id: SoundEffectId.PhoneConnected01,
     category: AudioCategory.SoundEffect,
     path: 'audio/sfx/sfx_phone_connected_01',
+  },
+  {
+    id: SoundEffectId.PhoneRingDay0UnknownNumber01,
+    category: AudioCategory.SoundEffect,
+    path: 'audio/sfx/sfx_phone_ring_day0_unknown_number',
   },
   {
     id: SoundEffectId.DocumentFlip01,
@@ -118,6 +136,7 @@ const AUDIO_CATEGORY_BY_ID = new Map<GameAudioId, AudioCategory>(
 
 export class GameAudioCatalog {
   public static readonly DefaultMusicId = MusicId.BgmTenseAmbientLoop;
+  public static readonly Day0IdentityRevealMusicId = MusicId.BgmDay0IdentityRevealStaticHallway;
   public static readonly SettingsClickId = SoundEffectId.UiSettingsClick01;
   public static readonly DocumentFlipId = SoundEffectId.DocumentFlip01;
   /** Shared move SFX for both shutter open and close. */
@@ -127,8 +146,11 @@ export class GameAudioCatalog {
   public static readonly DrawerMoveId = SoundEffectId.DrawerMove01;
   public static readonly PhoneDialId = SoundEffectId.PhoneDial01;
   public static readonly PhoneConnectedId = SoundEffectId.PhoneConnected01;
+  public static readonly Day0UnknownNumberPhoneRingId = SoundEffectId.PhoneRingDay0UnknownNumber01;
   /** Shared mark SFX for checklist check (√) and cross (×). */
   public static readonly DecisionMarkId = SoundEffectId.DecisionMark01;
+  /** One-shot roar at the first monster reveal frame. */
+  public static readonly MonsterDisguiseRevealRoarId = SoundEffectId.MonsterDisguiseRevealRoar01;
   /** Alien speech voice for NPC / impostor dialogue display. */
   public static readonly AlienVoiceId = VoiceId.AlienSpeech01;
   /** Formal complaint voice when a wrong rejection files a complaint. */

@@ -1,4 +1,4 @@
-0import {
+import {
                              _decorator,
   assetManager,
   BlockInputEvents,
@@ -9,6 +9,7 @@
   EventTouch,
   Graphics,
   Label,
+  Mask,
   Node,
   Overflow,
   Sprite,
@@ -21,6 +22,9 @@
   tween,
 } from 'cc';
 import { AudioManager } from '../audio/AudioManager';
+import { GameAudioCatalog, VoiceId } from '../audio/GameAudioCatalog';
+import { HomeSceneController } from '../ui/HomeSceneController';
+import { SettingsPanelController } from '../ui/SettingsPanelController';
 import { ShutterToggleController } from './ShutterToggleController';
 import { TelephoneController } from './TelephoneController';
 import { AppointmentRosterController } from './AppointmentRosterController';
@@ -44,11 +48,17 @@ import {
   assertDayCatalogValid,
   CAMPAIGN_DAY_CONFIGS,
   getDayLevelConfig,
+  getMonsterThreatTimingForDay,
   HIGHEST_IMPLEMENTED_CAMPAIGN_DAY,
   isCampaignDayIndex,
   isLastImplementedCampaignDay,
+  type MonsterThreatTimingConfig,
 } from './campaign/DayCatalog';
-import { consumeRequestedStartDay, hasRequestedStartDay } from './campaign/CampaignLaunchRequest';
+import {
+  consumeRequestedStartDay,
+  hasRequestedStartDay,
+} from './campaign/CampaignLaunchRequest';
+import { consumeDay0EndingTestLaunchRequested } from './campaign/Day0EndingTestLaunchRequest';
 import { unlockDay } from './campaign/CampaignProgressStore';
 import { buildDayQueue, runDayQueueStaticSelfCheck } from './campaign/DayQueueGenerator';
 import type { GeneratedDayQueue } from './campaign/DayQueueTypes';
@@ -101,54 +111,96 @@ type ChecklistItemKey = Exclude<ChecklistQuestion, null>;
 type ChecklistReplyContext = 'normal' | 'nervous' | 'threat';
 type GuidancePanelMode = 'help' | 'hint';
 type InspectionSubjectId = EmployeeKey;
+type MonsterThreatProtectionPhase =
+  | 'idle'
+  | 'open-window'
+  | 'closed-shutter'
+  | 'resolved'
+  | 'failed';
 type InspectionEntityKind = 'human' | 'monster';
 type InspectionRecordSource = 'employee-file' | 'appointment-roster' | 'none';
 type ChecklistActionMode = 'none' | 'pass' | 'question' | 'reject';
 type CarterRejectFlowSource = 'checklist-reject' | 'console-deny';
 type InspectionDecisionAction = 'allow' | 'reject';
+type Day4DocumentControl = 'employee-card' | 'application-form';
+type Day0EndingResultKind = 'keep-identity' | 'remove-threat';
+interface VisitorDocumentPhotoSlotLayout {
+  readonly nodeName: string;
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  readonly backgroundGray: number;
+}
+interface VisitorDocumentPhotoSlotRuntime {
+  readonly root: Node;
+  readonly mask: Mask;
+  readonly portraitSprite: Sprite;
+  readonly portraitTransform: UITransform;
+  readonly layout: VisitorDocumentPhotoSlotLayout;
+}
+interface Day4DocumentStateSnapshot {
+  readonly employeeCardVisualActive: boolean;
+  readonly employeeCardHitActive: boolean;
+  readonly employeeCardButtonInteractable: boolean;
+  readonly applicationFormVisualActive: boolean;
+  readonly applicationFormHitActive: boolean;
+  readonly applicationFormButtonInteractable: boolean;
+}
 interface SubjectDocumentFrameUuids {
   readonly employeeCard: string;
   readonly applicationForm: string;
 }
+type VisitorDocumentFrameUuidMap = Readonly<Record<'edward' | 'nadia', SubjectDocumentFrameUuids>>;
 
 const SUBJECT_DOCUMENT_FRAME_UUIDS: Record<InspectionSubjectId, SubjectDocumentFrameUuids> = {
   carter: {
-    employeeCard: 'c7699d15-e36e-43ec-b843-3445be1bb042@f9941',
-    applicationForm: '1edcd624-3f36-4033-a450-2436893fd0ef@f9941',
+    employeeCard: 'ee2e7474-1356-4422-8b8e-b53204687939@f9941',
+    applicationForm: '32f24a79-2be0-4cef-b9a3-d0e3c0f3ec0f@f9941',
   },
   ethan: {
-    employeeCard: 'a90c51b6-8234-43e4-acf5-996cf4b1dcc1@f9941',
-    applicationForm: '9d77da89-7b7c-43de-a386-7ba0ba373cc8@f9941',
+    employeeCard: '7c430379-2668-41c2-93f7-6219fc04ce07@f9941',
+    applicationForm: 'c1a56438-3b33-438c-8d83-623c9a017033@f9941',
   },
   jake: {
-    employeeCard: '355fece4-b3cb-4e94-9b25-e1a391b999c3@f9941',
-    applicationForm: '22f5c52e-0e99-4a3c-8932-1277fc7552b6@f9941',
+    employeeCard: '96f2ab68-47be-45b1-8b0d-6f01fca7a8af@f9941',
+    applicationForm: '58da3bef-b4a3-4898-831a-773c37c8be09@f9941',
   },
   alice: {
-    employeeCard: 'd152f393-d348-47d6-9cf2-f9c9a1b23f04@f9941',
-    applicationForm: '96e4ca44-350e-4f60-9e1c-e73558ea639e@f9941',
+    employeeCard: '561df5a5-30d4-4fa5-b6ff-e2119accdfe2@f9941',
+    applicationForm: '1891e962-9287-4e9e-8aa9-5a68bc3a3de3@f9941',
   },
   clara: {
-    employeeCard: '204b6259-07de-48b6-b6d4-ca9eb94e03f4@f9941',
-    applicationForm: 'f5fc34f5-8d29-4f47-8444-db1ef6b6821f@f9941',
+    employeeCard: 'b21b20f2-773a-4ac0-b6c1-3f1f509dec05@f9941',
+    applicationForm: 'b192b18b-f266-422b-acc2-e20e39ddd55d@f9941',
   },
   grace: {
-    employeeCard: '82b250bc-d84a-41e0-bf68-855823c212ac@f9941',
-    applicationForm: 'e1078fa1-c71e-4f8e-a116-38e62a443b4d@f9941',
+    employeeCard: '4aa42edc-c17b-4585-b152-fa6df135f742@f9941',
+    applicationForm: '494d1472-b91c-4345-afdb-b83ad29fd788@f9941',
   },
   mark: {
-    employeeCard: 'f19cf768-3d02-466e-af7d-ec4ba2bd6f9d@f9941',
-    applicationForm: 'a97962dc-318e-4ac7-be9d-c691a83ebc30@f9941',
+    employeeCard: '8a3b65dc-9fbc-4a31-a17c-418f9f8a31cf@f9941',
+    applicationForm: '30a6f846-9a13-49d8-b7e2-725324f98e51@f9941',
   },
   maya: {
-    employeeCard: '2f1bcf86-d5f8-466b-9324-fbb2f4684c73@f9941',
-    applicationForm: 'cb7e5f05-7062-4d75-b7f6-f78787e74e3b@f9941',
+    employeeCard: '5295f38f-b215-4ab9-ab97-b178d4db6a47@f9941',
+    applicationForm: '7a92f1b6-79cc-4386-a585-abe78cf1394a@f9941',
   },
   sam: {
-    employeeCard: '5fb96db8-a09a-4f05-9af9-77a4440ab935@f9941',
-    applicationForm: '6e2e2c9e-291e-4b61-9217-bbb95de7d277@f9941',
+    employeeCard: '8f895fa8-6f2c-40cc-b1d4-c230b30917bf@f9941',
+    applicationForm: '243635a1-7aae-4fc9-8b74-77c00000f567@f9941',
   },
 };
+const VISITOR_DOCUMENT_FRAME_UUIDS: VisitorDocumentFrameUuidMap = Object.freeze({
+  edward: Object.freeze({
+    employeeCard: 'b8aa2e9c-803e-4992-894f-362f20a06daa@f9941',
+    applicationForm: 'dc42ff03-e042-48a4-91a3-dc5648b0db4c@f9941',
+  }),
+  nadia: Object.freeze({
+    employeeCard: 'd4309c72-d039-46d2-a97a-096928017ddf@f9941',
+    applicationForm: '009cadd1-fe79-4a2b-a7bf-ccee81218052@f9941',
+  }),
+});
 
 type InspectionDecisionOutcome =
   | 'valid-human-allowed'
@@ -296,6 +348,7 @@ interface EmployeeCardDocumentPresentation {
   readonly position: string;
   readonly validUntilTitle: string;
   readonly validUntil: string;
+  readonly sealState: 'VALID' | 'MISSING';
 }
 
 interface ApplicationFormDocumentPresentation {
@@ -364,9 +417,13 @@ interface HintTypographyPresetConfig {
 export class EvidencePreviewController extends Component {
   private static readonly PURGE_PHONE_CODE = '1214';
   private static readonly MAIN_WINDOW_BACKGROUND_OFFICIAL_SPRITEFRAME_UUID =
-    '727b2ab2-35be-4955-a2ee-ad719d6f704b@f9941';
+    '70e13690-db55-4601-ab15-453c04d72032@f9941';
   private static readonly RETURN_HOME_BUTTON_SPRITEFRAME_UUID =
-    '4c6cd2e0-11f8-4ccb-9c5d-bf895caffe55@f9941';
+    '682d2d19-6170-4939-bb6b-acfe4042fed8@f9941';
+  private static readonly DAY0_ENDING_PLAYER_DISGUISED_SPRITEFRAME_UUID =
+    'b24b375b-3525-48b1-bbd3-c5d1c4d75442@f9941';
+  private static readonly DAY0_ENDING_PLAYER_TRUE_IDENTITY_PORTRAIT_SPRITEFRAME_UUID =
+    '8ada3c94-c810-48f3-a7b0-2e22bb5f760b@f9941';
   private static readonly RETURN_HOME_SCENE_NAME = 'HomeScene';
   private static readonly RETURN_HOME_BUTTON_MARGIN_LEFT = 16;
   private static readonly RETURN_HOME_BUTTON_MARGIN_TOP = 16;
@@ -378,7 +435,7 @@ export class EvidencePreviewController extends Component {
   private static readonly RETURN_HOME_BUTTON_PRESS_DURATION_SECONDS = 0.07;
   private static readonly MAIN_WINDOW_BACKGROUND_NODE_PATH = 'Canvas/WindowRuntime/WindowViewport/WindowInside';
   private static readonly MAIN_WINDOW_BACKGROUND_BLOCKED_SPRITEFRAME_UUIDS: ReadonlySet<string> =
-    new Set(['727b2ab2-35be-4955-a2ee-ad719d6f704b@f9941']);
+    new Set(['70e13690-db55-4601-ab15-453c04d72032@f9941']);
   private static hasRunShiftClockMathSelfCheck = false;
   private static readonly INTERNAL_CONTAMINATION_SUBTITLE = 'FACILITY COMPROMISED';
   private static readonly INTERNAL_CONTAMINATION_REASON_TEXT =
@@ -408,7 +465,7 @@ export class EvidencePreviewController extends Component {
       }),
     ]);
   private static readonly FAILURE_REVIEW_PANEL_BG_SPRITE_FRAME_UUID =
-    '138c8e18-384a-4ef4-aeca-89f1e1d14ec3@f9941';
+    '98f04450-ba06-434f-a4a4-962ce5819572@f9941';
   private static readonly FAILURE_REVIEW_NEXT_REASON_BUTTON_SPRITE_FRAME_UUID =
     'd04b1842-267c-4f0c-a34b-a87fb7fdd466@f9941';
   private static readonly FAILURE_REVIEW_PANEL_SOURCE_WIDTH = 941;
@@ -538,6 +595,84 @@ export class EvidencePreviewController extends Component {
     }),
   });
   private static readonly CHECKLIST_UNAVAILABLE_TEXT_CENTER_Y_OFFSET = 0;
+  private static readonly DAY0_ENDING_PHONE_DELAY_SECONDS = 3;
+  private static readonly DAY0_ENDING_PHONE_RING_INTERVAL_SECONDS = 2.4;
+  private static readonly DAY0_ENDING_ARCHIVE_REVEAL_DELAY_SECONDS = 1.2;
+  private static readonly DAY0_ENDING_SELF_DIALOGUE_FINAL_CHOICE_HOLD_SECONDS = 0.8;
+  private static readonly DAY0_ENDING_SELF_DIALOGUE_LINES: readonly string[] = Object.freeze([
+    "That's not me...",
+    'Then... who am I?',
+    "I'm one of them.",
+  ]);
+  private static readonly DAY0_ENDING_FINAL_CHOICE_KEEP_TEXT = 'KEEP YOUR IDENTITY.';
+  private static readonly DAY0_ENDING_FINAL_CHOICE_REMOVE_TEXT = 'REMOVE THE THREAT.';
+  private static readonly DAY0_ENDING_REMOVE_THREAT_ALERT_TEXT = 'THREAT IDENTIFIED';
+  private static readonly DAY0_ENDING_REMOVE_THREAT_ALERT_SECONDS = 1.15;
+  private static readonly DAY0_ENDING_REMOVE_THREAT_SHUTTER_CLOSE_SECONDS = 1.7;
+  private static readonly DAY0_ENDING_REMOVE_THREAT_POST_CLOSE_HOLD_SECONDS = 1.25;
+  private static readonly DAY0_ENDING_FINAL_CHOICE_RUNTIME_WIDTH = 640;
+  private static readonly DAY0_ENDING_FINAL_CHOICE_RUNTIME_HEIGHT = 230;
+  private static readonly DAY0_ENDING_FINAL_CHOICE_RUNTIME_X = 120;
+  private static readonly DAY0_ENDING_FINAL_CHOICE_RUNTIME_Y = -330;
+  private static readonly DAY0_ENDING_FINAL_CHOICE_OPTION_WIDTH = 500;
+  private static readonly DAY0_ENDING_FINAL_CHOICE_OPTION_HEIGHT = 84;
+  private static readonly DAY0_ENDING_FINAL_CHOICE_VERTICAL_GAP = 42;
+  private static readonly DAY0_ENDING_RESULT_PAPER_PATH = 'ui/game/fail/ui_game_fail_panel_webp_v1/spriteFrame';
+  private static readonly DAY0_ENDING_RESULT_RETURN_HOME_PATH =
+    'ui/game/ending/ui_btn_return_home/spriteFrame';
+  private static readonly DAY0_ENDING_RESULT_RUNTIME_WIDTH = 720;
+  private static readonly DAY0_ENDING_RESULT_RUNTIME_HEIGHT = 1280;
+  private static readonly DAY0_ENDING_RESULT_PANEL_MAX_WIDTH = 560;
+  private static readonly DAY0_ENDING_RESULT_PANEL_MAX_HEIGHT = 996;
+  private static readonly DAY0_ENDING_RESULT_MASK_ALPHA = 153;
+  private static readonly DAY0_ENDING_RESULT_BUTTON_HIT_WIDTH = 220;
+  private static readonly DAY0_ENDING_RESULT_BUTTON_HIT_HEIGHT = 122;
+  private static readonly DAY0_ENDING_RESULT_BUTTON_TARGET_HEIGHT = 84;
+  private static readonly DAY0_ENDING_RESULT_BUTTON_MAX_WIDTH = 195;
+  private static readonly DAY0_ENDING_RESULT_CONTENT: Readonly<
+    Record<
+      Day0EndingResultKind,
+      {
+        readonly title: string;
+        readonly body: string;
+      }
+    >
+  > = Object.freeze({
+    'keep-identity': Object.freeze({
+      title: 'IDENTITY PRESERVED',
+      body: 'You kept the life\nthat was never yours.\n\nTomorrow, you return to your post.\nNo one will know.',
+    }),
+    'remove-threat': Object.freeze({
+      title: 'THREAT REMOVED',
+      body: 'You ended the deception.\n\nThe final threat is gone.\nNo monsters remain.',
+    }),
+  });
+  private static readonly DAY0_ENDING_UNKNOWN_NUMBER_CALL_LINES: readonly string[] = Object.freeze([
+    'Congratulations.',
+    'However...',
+    'There is still one final inspection.',
+    'Now. Open the shutter.',
+  ]);
+  private static readonly VISITOR_DOCUMENT_PHOTO_SLOT_LAYOUT: Readonly<
+    Record<Day4DocumentControl, VisitorDocumentPhotoSlotLayout>
+  > = Object.freeze({
+    'employee-card': Object.freeze({
+      nodeName: 'VisitorDocumentPhotoSlotEmployeeCard',
+      x: 171,
+      y: -8,
+      width: 182,
+      height: 244,
+      backgroundGray: 198,
+    }),
+    'application-form': Object.freeze({
+      nodeName: 'VisitorDocumentPhotoSlotApplicationForm',
+      x: -26,
+      y: 217,
+      width: 222,
+      height: 228,
+      backgroundGray: 198,
+    }),
+  });
   private readonly roundGenerator = new RoundGenerator();
   private hasLoggedCampaignDayConfig = false;
   private hasRunPhase3StaticSelfCheck = false;
@@ -545,6 +680,8 @@ export class EvidencePreviewController extends Component {
   private hasRunPhase6AStaticSelfCheck = false;
   private hasRunPhase6BStaticSelfCheck = false;
   private activeDayConfig: DayLevelConfig | null = null;
+  private dayStartWrongAllowCount = 0;
+  private dayStartWrongDenyCount = 0;
   private activeAppointmentRosterDay: AppointmentRosterDay | null = null;
   private activeVisitorKeyForDepartmentPhone: VisitorKey | null = null;
   private activeDayQueue: GeneratedDayQueue | null = null;
@@ -566,19 +703,20 @@ export class EvidencePreviewController extends Component {
   private gameReturnHomeButtonLoadGeneration = 0;
   private gameReturnHomeInProgress = false;
   private gameReturnHomeBaseScale = new Vec3(1, 1, 1);
+  private gameSettingsPanelController: SettingsPanelController | null = null;
   private previousRoundSignature: string | null = null;
   private currentRound: RoundInstance | null = null;
   private currentInspectionSubject: InspectionSubject | null = null;
   private visitorVisualLoadGeneration = 0;
   private mainInspectionWindowBackgroundLoadGeneration = 0;
+  private mainInspectionWindowBackgroundReadyPromise: Promise<void> | null = null;
   private visitorVisualPresentationRoundId: string | null = null;
   private committedVisitorVisualRoundId: string | null = null;
+  private inspectionViewReady = false;
   private completedRoundCount = 0;
   private activeInspectionSubjectId: InspectionSubjectId = 'carter';
   private readonly roundSpriteFrameCache = new Map<string, SpriteFrame>();
-  private static readonly MONSTER_SHUTTER_RESPONSE_WINDOW_SECONDS = 10;
-  private readonly phonePickupWindowSeconds = 3;
-  private readonly phoneDialWindowSeconds = 5;
+  private static readonly MONSTER_GAMEOVER_ALARM_SECONDS = 6;
   private readonly damagedShutterHoldSeconds = 1.0;
   private readonly cleanupSuccessDisplaySeconds = 1.0;
   private cleanupTransitionScheduled = false;
@@ -695,6 +833,7 @@ export class EvidencePreviewController extends Component {
   private appointmentRosterHit: Node | null = null;
   private employeeCardVisual: Node | null = null;
   private applicationFormVisual: Node | null = null;
+  private screeningChecklistVisual: Node | null = null;
   private telephoneVisual: Node | null = null;
   private appointmentRosterVisual: Node | null = null;
   private evidencePreviewRuntime: Node | null = null;
@@ -744,6 +883,7 @@ export class EvidencePreviewController extends Component {
   private checklistActionLabel: Label | null = null;
   private checklistReplyLabel: Label | null = null;
   private checklistReplyContinueButton: Button | null = null;
+  private checklistReplyBoxButton: Button | null = null;
   private readonly checklistReplyTypingInterval = 0.035;
   private checklistReplyFullText = '';
   private checklistReplyTypedLength = 0;
@@ -795,6 +935,44 @@ export class EvidencePreviewController extends Component {
   private shiftClockController: ShiftClockController | null = null;
   private dayCompletionOverlayController: DayCompletionOverlayController | null = null;
   private hasStartedCampaignShiftClock = false;
+  private day0EndingDisplayTestActive = false;
+  private day0EndingPhoneActive = false;
+  private day0EndingPhoneReady = false;
+  private day0EndingPhoneSequenceStarted = false;
+  private day0EndingPhoneSequenceCompleted = false;
+  private day0EndingTelephoneStoryLock = false;
+  private day0EndingAwaitShutter = false;
+  private day0EndingIdentityRevealMusicPlayed = false;
+  private day0EndingArchiveRevealActive = false;
+  private day0EndingSelfDialogueInProgress = false;
+  private day0EndingSelfDialogueCompleted = false;
+  private day0EndingSelfDialogueFinalChoiceQueued = false;
+  private day0EndingSelfDialogueToken = 0;
+  private day0EndingFinalChoiceActive = false;
+  private day0EndingFinalChoiceCompleted = false;
+  private day0EndingFinalChoiceTransitionInProgress = false;
+  private day0EndingFinalChoiceSelection: Day0EndingResultKind | null = null;
+  private day0EndingShutterOpenSettledListenerRegistered = false;
+  private day0EndingFinalChoiceRuntime: Node | null = null;
+  private day0EndingFinalChoiceKeepHit: Node | null = null;
+  private day0EndingFinalChoiceRemoveHit: Node | null = null;
+  private day0EndingFinalChoiceKeepButton: Button | null = null;
+  private day0EndingFinalChoiceRemoveButton: Button | null = null;
+  private day0EndingFinalChoiceKeepLabel: Label | null = null;
+  private day0EndingFinalChoiceRemoveLabel: Label | null = null;
+  private day0EndingResultRuntime: Node | null = null;
+  private day0EndingResultInputBlocker: Node | null = null;
+  private day0EndingResultBackground: Node | null = null;
+  private day0EndingResultTitleNode: Node | null = null;
+  private day0EndingResultBodyNode: Node | null = null;
+  private day0EndingResultReturnHomeVisual: Node | null = null;
+  private day0EndingResultReturnHomeHit: Node | null = null;
+  private day0EndingResultReturnHomeButton: Button | null = null;
+  private day0EndingResultVisible = false;
+  private day0EndingResultKind: Day0EndingResultKind | null = null;
+  private day0EndingResultReturnLocked = false;
+  private day0EndingResultPaperFrame: SpriteFrame | null = null;
+  private day0EndingResultReturnHomeFrame: SpriteFrame | null = null;
   private visitorGreetingRuntime: Node | null = null;
   private employeeFilesController: EmployeeFilesController | null = null;
   private telephoneHitButton: Button | null = null;
@@ -870,6 +1048,7 @@ export class EvidencePreviewController extends Component {
   private internalContaminationMonsterCenter: Node | null = null;
   private internalContaminationMonsterRight: Node | null = null;
   private internalContaminationVisualGeneration = 0;
+  private internalContaminationGameOverAudioPlayed = false;
   private currentAdministrativeGameOverReason: AdministrativeGameOverReason | null = null;
   private activeGameOverContext: ActiveGameOverContext | null = null;
   private gameOverGeneration = 0;
@@ -891,6 +1070,8 @@ export class EvidencePreviewController extends Component {
   private employeeCardValidUntilValueLabel: Label | null = null;
   private employeeCardSecurityLogoSprite: Sprite | null = null;
   private carterApplicationDynamicLayer: Node | null = null;
+  private visitorEmployeeCardPhotoSlot: VisitorDocumentPhotoSlotRuntime | null = null;
+  private visitorApplicationFormPhotoSlot: VisitorDocumentPhotoSlotRuntime | null = null;
   private applicationIdNumberValueLabel: Label | null = null;
   private applicationNameValueLabel: Label | null = null;
   private applicationPositionValueLabel: Label | null = null;
@@ -902,6 +1083,7 @@ export class EvidencePreviewController extends Component {
   private deskEmployeeCardSprite: Sprite | null = null;
   private deskApplicationFormSprite: Sprite | null = null;
   private carterEmployeeFilePortraitFrame: SpriteFrame | null = null;
+  private day0EndingPlayerDisguisedFrame: SpriteFrame | null = null;
   private ethanDisguisedFrame: SpriteFrame | null = null;
   private ethanPortraitFrame: SpriteFrame | null = null;
   private ethanMonsterPortraitFrame: SpriteFrame | null = null;
@@ -923,12 +1105,19 @@ export class EvidencePreviewController extends Component {
   private threatSequenceActive = false;
   private emergencyWindowOpen = false;
   private emergencyShutterSucceeded = false;
+  private emergencyShutterCloseRequested = false;
   private carterAttackTriggered = false;
   private emergencyDeadlineMs = 0;
   private phoneResponseWindowOpen = false;
   private phoneResponseDeadlineMs = 0;
   private phoneDialWindowOpen = false;
   private phoneDialDeadlineMs = 0;
+  private activeMonsterThreatTiming: MonsterThreatTimingConfig | null = null;
+  private activeMonsterThreatDay = 1;
+  private monsterThreatProtectionPhase: MonsterThreatProtectionPhase = 'idle';
+  private monsterThreatGeneration = 0;
+  private emergencyTimeoutGeneration = 0;
+  private closedShutterProtectionGranted = false;
   private cleanupProgramActivated = false;
   private phoneEmergencyResolved = false;
   private emergencyPhoneOpenedListenerRegistered = false;
@@ -936,7 +1125,15 @@ export class EvidencePreviewController extends Component {
   private emergencyShutterClosedSettledListenerRegistered = false;
   private damagedShutterAppliedListenerRegistered = false;
   private delayedDamagedShutterSwitchScheduled = false;
+  private day0EndingPlayerDisguisedFrameLoading = false;
   private inspectionDecisionResolutionInProgress = false;
+  private static readonly INTERACTION_RUNTIME_DIAGNOSTIC_ENABLED = true;
+  private readonly interactionSnapshotReasonOnce = new Set<string>();
+  private readonly day4DocumentTraceReasonOnce = new Set<string>();
+  private readonly day4DocumentDisabledOnce = new Set<string>();
+  private lastDay4DocumentStateSnapshot: Day4DocumentStateSnapshot | null = null;
+  private lastKnownTelephoneEntryEnabled: boolean | null = null;
+  private lastKnownShutterInteractionEnabled: boolean | null = null;
   private isDestroying = false;
   private incompleteRejectNoticeInFlight = false;
   private formalComplaintCount = 0;
@@ -947,25 +1144,22 @@ export class EvidencePreviewController extends Component {
   private latestReviveCheckpoint: ReviveCheckpoint | null = null;
 
   private readonly handleCarterEmergencyCloseAccepted = (): void => {
-    if (!this.threatSequenceActive || !this.emergencyWindowOpen) {
+    if (!this.threatSequenceActive) {
       return;
     }
-    if (this.carterAttackTriggered || this.emergencyShutterSucceeded) {
+    if (this.carterAttackTriggered || this.carterEncounterResolved || this.cleanupProgramActivated) {
       return;
     }
-    if (Date.now() > this.emergencyDeadlineMs) {
+    if (this.monsterThreatProtectionPhase !== 'open-window') {
+      return;
+    }
+    if (this.emergencyDeadlineMs > 0 && Date.now() > this.emergencyDeadlineMs) {
       this.handleEmergencyTimeout();
       return;
     }
-
-    this.emergencyShutterSucceeded = true;
-    this.emergencyWindowOpen = false;
-    this.threatSequenceActive = false;
-    this.unschedule(this.handleEmergencyTimeout);
-    this.emergencyDeadlineMs = 0;
-    this.unbindEmergencyCloseListener();
+    this.emergencyShutterCloseRequested = true;
     this.hideCarterThreatReplyCompletely();
-    this.shutterController?.setInteractionEnabled(false);
+    this.setShutterInteractionEnabledForInteractionTrace(false, 'emergency-close-accepted');
     this.bindEmergencyShutterClosedSettledListener();
   };
 
@@ -979,11 +1173,29 @@ export class EvidencePreviewController extends Component {
       this.unbindEmergencyShutterClosedSettledListener();
       return;
     }
-    if (!this.emergencyShutterSucceeded) {
+    if (!this.emergencyShutterCloseRequested) {
       return;
     }
+    if (this.closedShutterProtectionGranted || this.monsterThreatProtectionPhase !== 'open-window') {
+      return;
+    }
+    const threatTiming = this.activeMonsterThreatTiming;
+    if (!threatTiming) {
+      return;
+    }
+    this.emergencyShutterSucceeded = true;
+    this.emergencyWindowOpen = false;
+    this.closedShutterProtectionGranted = true;
+    this.monsterThreatProtectionPhase = 'closed-shutter';
+    this.unschedule(this.handleEmergencyTimeout);
+    const closedShutterBreakSeconds = threatTiming.closedShutterBreakSeconds;
+    this.emergencyDeadlineMs = Date.now() + closedShutterBreakSeconds * 1000;
+    this.emergencyTimeoutGeneration = this.monsterThreatGeneration;
+    this.scheduleOnce(this.handleEmergencyTimeout, closedShutterBreakSeconds);
     this.unbindEmergencyShutterClosedSettledListener();
-    console.info('[CarterEmergency] normal shutter closed');
+    this.logMonsterThreatTiming(
+      `shutter fully closed phase=closed-shutter day=${this.activeMonsterThreatDay} seconds=${closedShutterBreakSeconds}`,
+    );
     this.scheduleDamagedShutterAfterClosedHold();
   };
 
@@ -1015,7 +1227,6 @@ export class EvidencePreviewController extends Component {
       return;
     }
     console.info('[CarterEmergency] shutter impact loop started');
-    this.beginPhoneResponseWindow();
   };
 
   private readonly handleDamagedShutterApplied = (): void => {
@@ -1023,14 +1234,17 @@ export class EvidencePreviewController extends Component {
   };
 
   private readonly handleEmergencyPhoneOpened = (): void => {
-    if (!this.phoneResponseWindowOpen || this.cleanupProgramActivated || this.phoneEmergencyResolved) {
+    if (
+      (!this.phoneResponseWindowOpen && !this.phoneDialWindowOpen) ||
+      this.cleanupProgramActivated ||
+      this.phoneEmergencyResolved
+    ) {
       return;
     }
     if (this.carterEncounterResolved || this.carterAttackTriggered) {
       return;
     }
-    if (Date.now() > this.phoneResponseDeadlineMs) {
-      this.handlePhonePickupTimeout();
+    if (this.phoneDialWindowOpen) {
       return;
     }
     this.phoneResponseWindowOpen = false;
@@ -1074,6 +1288,7 @@ export class EvidencePreviewController extends Component {
     if (this.cleanupProgramActivated || this.phoneEmergencyResolved || this.carterAttackTriggered) {
       return;
     }
+    this.logMonsterThreatTiming('timeout phase=phone-dial');
     this.triggerCarterBreakthroughFailure('dial-timeout');
   };
 
@@ -1087,15 +1302,318 @@ export class EvidencePreviewController extends Component {
     }
   };
 
+  private readonly handleDay0EndingPhoneDelayElapsed = (): void => {
+    if (!this.day0EndingDisplayTestActive || this.day0EndingPhoneSequenceCompleted || this.isDestroying) {
+      return;
+    }
+    this.day0EndingPhoneActive = true;
+    this.day0EndingPhoneReady = false;
+    this.day0EndingPhoneSequenceStarted = false;
+    this.setTelephoneEntryEnabledForInteractionTrace(false, 'day0-ending-phone-ringing');
+    if (this.telephoneHit?.isValid) {
+      this.telephoneHit.active = true;
+    }
+    if (this.telephoneHitButton?.node?.isValid) {
+      this.telephoneHitButton.interactable = true;
+    }
+    const armed =
+      this.telephoneController?.armDay0EndingUnknownNumberCall(
+        EvidencePreviewController.DAY0_ENDING_UNKNOWN_NUMBER_CALL_LINES,
+        this.handleDay0EndingUnknownNumberCallComplete,
+        this.handleDay0EndingUnknownNumberCallStarted,
+      ) ?? false;
+    if (!armed) {
+      this.day0EndingPhoneActive = false;
+      this.day0EndingPhoneReady = false;
+      return;
+    }
+    this.day0EndingPhoneReady = true;
+    this.playDay0EndingPhoneRing();
+  };
+
+  private readonly handleDay0EndingPhoneRingElapsed = (): void => {
+    if (
+      !this.day0EndingPhoneActive ||
+      this.day0EndingPhoneSequenceStarted ||
+      !this.day0EndingDisplayTestActive ||
+      this.isDestroying
+    ) {
+      return;
+    }
+    this.playDay0EndingPhoneRing();
+  };
+
+  private readonly handleDay0EndingUnknownNumberCallStarted = (): void => {
+    if (!this.day0EndingDisplayTestActive || this.day0EndingPhoneSequenceCompleted) {
+      return;
+    }
+    this.day0EndingTelephoneStoryLock = true;
+    this.telephoneController?.setDay0EndingTelephoneStoryLock(true);
+    this.day0EndingPhoneSequenceStarted = true;
+    this.day0EndingPhoneActive = false;
+    this.day0EndingPhoneReady = false;
+    this.unschedule(this.handleDay0EndingPhoneRingElapsed);
+    if (this.telephoneHitButton?.node?.isValid) {
+      this.telephoneHitButton.interactable = false;
+    }
+  };
+
+  private readonly handleDay0EndingUnknownNumberCallComplete = (): void => {
+    this.day0EndingTelephoneStoryLock = false;
+    this.telephoneController?.setDay0EndingTelephoneStoryLock(false);
+    this.day0EndingPhoneSequenceCompleted = true;
+    this.day0EndingPhoneSequenceStarted = false;
+    this.day0EndingPhoneActive = false;
+    this.day0EndingPhoneReady = false;
+    this.day0EndingAwaitShutter = true;
+    this.unschedule(this.handleDay0EndingPhoneRingElapsed);
+    this.setTelephoneEntryEnabledForInteractionTrace(false, 'day0-ending-phone-sequence-complete');
+    if (this.telephoneHitButton?.node?.isValid) {
+      this.telephoneHitButton.interactable = false;
+    }
+    this.armDay0EndingAwaitShutterPhase();
+  };
+
+  private readonly handleDay0EndingArchiveRevealDelayElapsed = (): void => {
+    if (
+      !this.day0EndingDisplayTestActive ||
+      this.day0EndingAwaitShutter ||
+      this.day0EndingArchiveRevealActive ||
+      this.isDestroying
+    ) {
+      return;
+    }
+    this.activateDay0EndingArchiveRevealPhase3();
+  };
+
+  private readonly handleDay0EndingTelephoneTouch = (event?: EventTouch): void => {
+    if (!this.isDay0EndingPhoneTouchBlockWindow()) {
+      return;
+    }
+    event?.stopPropagationImmediate();
+  };
+
+  private isDay0EndingPhoneTouchBlockWindow(): boolean {
+    if (!this.day0EndingDisplayTestActive || this.day0EndingPhoneReady || this.isDestroying) {
+      return false;
+    }
+    // Restrict touch swallowing to the Day0 ending phone waiting stage only.
+    // Outside this stage (regular campaign / monster cleanup flow), telephone clicks
+    // must propagate to TelephoneController Button.CLICK.
+    return (
+      this.day0EndingPhoneActive &&
+      !this.day0EndingPhoneSequenceStarted &&
+      !this.day0EndingPhoneSequenceCompleted &&
+      !this.day0EndingAwaitShutter &&
+      !this.day0EndingArchiveRevealActive
+    );
+  }
+
+  private readonly handleDay0EndingShutterOpenSettled = (): void => {
+    if (
+      !this.day0EndingDisplayTestActive ||
+      !this.day0EndingAwaitShutter ||
+      this.day0EndingArchiveRevealActive ||
+      this.isDestroying
+    ) {
+      this.unbindDay0EndingShutterOpenSettledListener();
+      return;
+    }
+    this.handleDay0EndingShutterClick();
+  };
+
+  private readonly handleDay0EndingArchiveRevealDetailClosed = (): void => {
+    if (
+      !this.day0EndingDisplayTestActive ||
+      !this.day0EndingArchiveRevealActive ||
+      this.day0EndingFinalChoiceActive ||
+      this.day0EndingFinalChoiceTransitionInProgress ||
+      this.day0EndingSelfDialogueInProgress ||
+      this.day0EndingSelfDialogueCompleted ||
+      this.day0EndingSelfDialogueFinalChoiceQueued ||
+      this.isDestroying
+    ) {
+      return;
+    }
+    this.beginDay0EndingSelfDialoguePhase();
+  };
+
+  private readonly handleDay0EndingSelfDialogueHoldElapsed = (): void => {
+    if (
+      !this.day0EndingDisplayTestActive ||
+      this.isDestroying ||
+      !this.day0EndingSelfDialogueFinalChoiceQueued ||
+      this.day0EndingFinalChoiceActive ||
+      this.day0EndingFinalChoiceTransitionInProgress
+    ) {
+      return;
+    }
+    this.day0EndingSelfDialogueFinalChoiceQueued = false;
+    this.enterDay0EndingFinalChoice();
+  };
+
+  private beginDay0EndingSelfDialoguePhase(): void {
+    if (
+      !this.day0EndingDisplayTestActive ||
+      this.isDestroying ||
+      this.day0EndingFinalChoiceActive ||
+      this.day0EndingFinalChoiceTransitionInProgress ||
+      this.day0EndingSelfDialogueInProgress ||
+      this.day0EndingSelfDialogueCompleted ||
+      this.day0EndingSelfDialogueFinalChoiceQueued
+    ) {
+      return;
+    }
+    this.day0EndingSelfDialogueInProgress = true;
+    this.day0EndingSelfDialogueCompleted = false;
+    this.day0EndingSelfDialogueFinalChoiceQueued = false;
+    this.day0EndingSelfDialogueToken += 1;
+    this.setDay0EndingFinalChoiceVisible(false);
+    void this.playDay0EndingSelfDialogueSequence(this.day0EndingSelfDialogueToken);
+  }
+
+  private isDay0EndingSelfDialogueTokenActive(token: number): boolean {
+    return (
+      this.day0EndingSelfDialogueInProgress &&
+      this.day0EndingSelfDialogueToken === token &&
+      this.day0EndingDisplayTestActive &&
+      !this.isDestroying &&
+      !this.day0EndingFinalChoiceActive &&
+      !this.day0EndingFinalChoiceTransitionInProgress
+    );
+  }
+
+  private async playDay0EndingSelfDialogueSequence(token: number): Promise<void> {
+    try {
+      if (!this.visitorIntroController) {
+        throw new Error('[Day0Ending] VisitorIntroSequenceController is unavailable for self dialogue.');
+      }
+      for (const line of EvidencePreviewController.DAY0_ENDING_SELF_DIALOGUE_LINES) {
+        if (!this.isDay0EndingSelfDialogueTokenActive(token)) {
+          return;
+        }
+        await this.visitorIntroController.showVisitorDialogue(line, {
+          autoCloseSeconds: 0,
+          allowTapDismiss: true,
+          minimumVisibleSeconds: 0,
+          messageKind: 'system',
+        });
+      }
+      if (!this.isDay0EndingSelfDialogueTokenActive(token)) {
+        return;
+      }
+      this.day0EndingSelfDialogueInProgress = false;
+      this.day0EndingSelfDialogueCompleted = true;
+      this.day0EndingSelfDialogueFinalChoiceQueued = true;
+      this.scheduleOnce(
+        this.handleDay0EndingSelfDialogueHoldElapsed,
+        EvidencePreviewController.DAY0_ENDING_SELF_DIALOGUE_FINAL_CHOICE_HOLD_SECONDS,
+      );
+    } catch (error) {
+      this.triggerDay0EndingSelfDialogueFailureFallback(error);
+    }
+  }
+
+  private triggerDay0EndingSelfDialogueFailureFallback(error: unknown): void {
+    console.error('[Day0Ending] Self dialogue failed. Falling back to final choice.', error);
+    this.day0EndingSelfDialogueInProgress = false;
+    this.day0EndingSelfDialogueCompleted = true;
+    this.day0EndingSelfDialogueFinalChoiceQueued = false;
+    this.unschedule(this.handleDay0EndingSelfDialogueHoldElapsed);
+    if (
+      !this.day0EndingDisplayTestActive ||
+      this.isDestroying ||
+      this.day0EndingFinalChoiceActive ||
+      this.day0EndingFinalChoiceTransitionInProgress
+    ) {
+      return;
+    }
+    this.enterDay0EndingFinalChoice();
+  }
+
+  private readonly handleDay0EndingRemoveThreatAlertElapsed = (): void => {
+    if (
+      !this.day0EndingDisplayTestActive ||
+      !this.day0EndingFinalChoiceTransitionInProgress ||
+      this.day0EndingFinalChoiceSelection !== 'remove-threat' ||
+      this.isDestroying
+    ) {
+      return;
+    }
+    this.beginDay0EndingRemoveThreatShutterCloseStep();
+  };
+
+  private readonly handleDay0EndingRemoveThreatFinalizeElapsed = (): void => {
+    if (
+      !this.day0EndingDisplayTestActive ||
+      !this.day0EndingFinalChoiceTransitionInProgress ||
+      this.day0EndingFinalChoiceSelection !== 'remove-threat' ||
+      this.isDestroying
+    ) {
+      return;
+    }
+    this.beginDay0EndingRemoveThreatFinalizeStep();
+  };
+
+  private readonly handleDay0EndingRemoveThreatReturnHomeElapsed = (): void => {
+    if (
+      !this.day0EndingDisplayTestActive ||
+      !this.day0EndingFinalChoiceTransitionInProgress ||
+      this.day0EndingFinalChoiceSelection !== 'remove-threat' ||
+      this.isDestroying
+    ) {
+      return;
+    }
+    this.finalizeDay0EndingState('remove-threat');
+    void this.showDay0EndingResult('remove-threat');
+  };
+
+  private readonly handleStopMonsterGameOverAlarm = (): void => {
+    this.stopMonsterGameOverAlarmAudio();
+  };
+
+  private playMonsterGameOverAudioCueIfNeeded(): void {
+    const audio = AudioManager.getInstance();
+    if (!audio) {
+      return;
+    }
+    audio.playCachedMonsterDisguiseRevealRoar();
+    audio.startAlarmLoop();
+    this.unschedule(this.handleStopMonsterGameOverAlarm);
+    this.scheduleOnce(
+      this.handleStopMonsterGameOverAlarm,
+      EvidencePreviewController.MONSTER_GAMEOVER_ALARM_SECONDS,
+    );
+  }
+
+  private stopMonsterGameOverAlarmAudio(): void {
+    this.unschedule(this.handleStopMonsterGameOverAlarm);
+    AudioManager.getInstance()?.stopAlarmLoop();
+    this.internalContaminationGameOverAudioPlayed = false;
+  }
+
+  private playInternalContaminationGameOverAudioCueIfNeeded(): void {
+    if (this.internalContaminationGameOverAudioPlayed) {
+      return;
+    }
+    const audio = AudioManager.getInstance();
+    if (!audio) {
+      return;
+    }
+    this.internalContaminationGameOverAudioPlayed = true;
+    audio.playCachedMonsterDisguiseRevealRoar();
+    audio.startAlarmLoop();
+  }
+
   private readonly handleCleanupTransitionComplete = async (): Promise<void> => {
     this.cleanupTransitionScheduled = false;
     this.unschedule(this.handleCleanupTransitionComplete);
     this.telephoneController?.closeEmergencyPhone();
-    this.telephoneController?.setTelephoneEntryEnabled(false);
+    this.setTelephoneEntryEnabledForInteractionTrace(false, 'cleanup-transition-complete');
     this.shutterController?.stopShutterImpactLoop();
     this.shutterController?.restoreNormalVisual();
     this.shutterController?.prepareClosedForIntro();
-    this.shutterController?.setInteractionEnabled(false);
+    this.setShutterInteractionEnabledForInteractionTrace(false, 'cleanup-transition-complete');
     this.hideCarterThreatReplyCompletely();
     this.stopChecklistReplyTyping(true);
     this.configureChecklistReplyOverlay(true, true);
@@ -1136,14 +1654,17 @@ export class EvidencePreviewController extends Component {
       return;
     }
     this.ensureGameReturnHomeButtonRuntime(canvas);
+    this.ensureGameSettingsPanelController(canvas);
 
     this.employeeCardHit = this.node.getChildByName('EmployeeCardHit');
     this.applicationFormHit = this.node.getChildByName('ApplicationFormHit');
     this.screeningChecklistHit = this.node.getChildByName('ScreeningChecklistHit');
     this.telephoneHit = this.node.getChildByName('TelephoneHit');
     this.appointmentRosterHit = this.node.getChildByName('AppointmentRosterHit');
+    const employeeDrawersClosedRuntime = this.node.getChildByName('EmployeeDrawersClosedRuntime');
     this.employeeCardVisual = this.node.getChildByName('EmployeeCardVisual');
     this.applicationFormVisual = this.node.getChildByName('ApplicationFormVisual');
+    this.screeningChecklistVisual = this.node.getChildByName('ScreeningChecklistVisual');
     this.telephoneVisual = this.node.getChildByName('TelephoneVisual');
     this.appointmentRosterVisual = this.node.getChildByName('AppointmentRosterVisual');
 
@@ -1208,6 +1729,7 @@ export class EvidencePreviewController extends Component {
       this.carterApplicationDynamicLayer
         ?.getChildByName('ReasonForEntryValueLabel')
         ?.getComponent(Label) ?? null;
+    this.configureApplicationReasonForEntryTypography();
     this.applicationSecurityLogoSprite =
       this.carterApplicationDynamicLayer?.getChildByName('SecurityLogo')?.getComponent(Sprite) ?? null;
     this.complaintCompanyLogoFrame =
@@ -1276,6 +1798,11 @@ export class EvidencePreviewController extends Component {
     this.checklistReplyScrimBlockInput = this.checklistReplyScrim?.getComponent(BlockInputEvents) ?? null;
     this.checklistReplyLabel = this.checklistReplyTextNode?.getComponent(Label) ?? null;
     this.checklistReplyContinueButton = this.checklistReplyContinueHit?.getComponent(Button) ?? null;
+    this.checklistReplyBoxButton = this.checklistReplyBox?.getComponent(Button) ?? this.checklistReplyBox?.addComponent(Button) ?? null;
+    if (this.checklistReplyBoxButton) {
+      this.checklistReplyBoxButton.target = this.checklistReplyBox;
+      this.checklistReplyBoxButton.transition = Button.Transition.NONE;
+    }
     this.checklistActionButton = checklistActionHitButton;
 
     if (!this.applicationFormCloseButton) {
@@ -1290,7 +1817,7 @@ export class EvidencePreviewController extends Component {
     const telephoneHit = this.telephoneHit;
     const windowRuntime = canvas.getChildByName('WindowRuntime');
     const windowViewport = windowRuntime?.getChildByName('WindowViewport') ?? null;
-    void this.ensureMainInspectionWindowBackground(windowViewport);
+    this.mainInspectionWindowBackgroundReadyPromise = this.ensureMainInspectionWindowBackground(windowViewport);
     this.carterCharacter = windowViewport?.getChildByName('CarterCharacter') ?? null;
     this.carterCharacterSprite = this.carterCharacter?.getComponent(Sprite) ?? null;
     this.carterCharacterUi = this.carterCharacter?.getComponent(UITransform) ?? null;
@@ -1330,9 +1857,9 @@ export class EvidencePreviewController extends Component {
       employeeFileDetailContent?.getChildByName('FilePortraitSprite')?.getComponent(Sprite)?.spriteFrame ?? null;
     this.visitorIntroController = canvas.getComponent(VisitorIntroSequenceController);
     this.visitorGreetingRuntime = canvas.getChildByName('VisitorGreetingRuntime');
-    const employeeDrawersClosedRuntime = this.node.getChildByName('EmployeeDrawersClosedRuntime');
     this.employeeFilesController = employeeDrawersClosedRuntime?.getComponent(EmployeeFilesController) ?? null;
     this.resolveEthanAssetSources(canvas);
+    this.preloadDay0EndingPlayerIdentityFrames();
     this.carterAttackScrimGraphics = this.carterMonsterAttackScrim?.getComponent(Graphics) ?? null;
     this.carterGameOverPanelGraphics =
       this.carterGameOverPanelRuntime?.getComponent(Graphics) ?? null;
@@ -1348,6 +1875,8 @@ export class EvidencePreviewController extends Component {
     this.guidanceHelpButton = this.guidanceHelpButtonNode?.getComponent(Button) ?? null;
     this.guidanceHintButton = this.guidanceHintButtonNode?.getComponent(Button) ?? null;
     this.ensureGuidanceOverlayRuntime(canvas);
+    this.ensureDay0EndingFinalChoiceRuntime();
+    this.ensureDay0EndingResultRuntime();
 
     const scrimGraphics = this.previewScrim?.getComponent(Graphics) ?? null;
 
@@ -1551,10 +2080,11 @@ export class EvidencePreviewController extends Component {
     }
 
     this.captureEncounterButtons(canvas);
-    this.setManagedButtonsInteractable(false);
+    this.setInspectionViewReady(false, 'onload-initial-lock');
+    this.setManagedButtonsInteractable(false, 'bootstrap-lock');
     this.updateGuidanceButtonInteractivity();
-    this.telephoneController?.setTelephoneEntryEnabled(false);
-    this.shutterController?.setInteractionEnabled(false);
+    this.setTelephoneEntryEnabledForInteractionTrace(false, 'bootstrap-lock');
+    this.setShutterInteractionEnabledForInteractionTrace(false, 'bootstrap-lock');
     this.initializeDayCompletionOverlayController(canvas);
     void this.bootstrapRoundEngine();
   }
@@ -1680,12 +2210,53 @@ export class EvidencePreviewController extends Component {
     this.dayCompletionOverlayController.hide();
   }
 
+  private setInspectionViewReady(ready: boolean, reason: string): void {
+    if (this.inspectionViewReady === ready) {
+      return;
+    }
+    this.inspectionViewReady = ready;
+    if (ready) {
+      HomeSceneController.hidePersistentLoadingOverlay();
+      // Re-apply controller availability once the view is ready so
+      // TelephoneController can restore TelephoneVisual/TelephoneHit state.
+      // Skip Day0 ending test path where custom scripted states are used.
+      if (this.activeDayConfig) {
+        this.applyCampaignConfigurationToControllers();
+      }
+    }
+    this.applyInspectionViewReadyToTelephone(reason);
+  }
+
+  private applyInspectionViewReadyToTelephone(reason: string): void {
+    if (!this.inspectionViewReady) {
+      this.logInteractionTrace('inspection-view-ready', {
+        value: false,
+        reason,
+        day: this.getActiveCampaignDayIndex(),
+        subject: this.getActiveSubjectKeyForInteractionTrace(),
+        generation: this.decisionResolutionToken,
+      });
+      return;
+    }
+    this.logInteractionTrace('inspection-view-ready', {
+      value: true,
+      reason,
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+    });
+  }
+
   onEnable(): void {
+    this.employeeFilesController?.setDay0EndingArchiveRevealDetailClosedCallback(
+      this.handleDay0EndingArchiveRevealDetailClosed,
+    );
     this.gameReturnHomeButtonHit?.on(Node.EventType.TOUCH_START, this.handleGameReturnHomeTouchStart, this);
     this.gameReturnHomeButtonHit?.on(Node.EventType.TOUCH_END, this.handleGameReturnHomeTouchEnd, this);
     this.employeeCardHit?.on(Node.EventType.TOUCH_END, this.openEmployeeCard, this);
     this.applicationFormHit?.on(Node.EventType.TOUCH_END, this.openApplicationForm, this);
     this.screeningChecklistHit?.on(Node.EventType.TOUCH_END, this.openScreeningChecklist, this);
+    this.telephoneHit?.on(Node.EventType.TOUCH_END, this.handleDay0EndingTelephoneTouch, this, true);
     this.employeeCardCloseHit?.on(Node.EventType.TOUCH_END, this.onClosePreviewClick, this);
     this.applicationFormCloseHit?.on(Button.EventType.CLICK, this.onClosePreviewClick, this);
     this.screeningChecklistCloseHit?.on(Button.EventType.CLICK, this.onClosePreviewClick, this);
@@ -1706,7 +2277,9 @@ export class EvidencePreviewController extends Component {
     }
     if (this.checklistReplyUiReady) {
       this.checklistReplyContinueHit?.on(Button.EventType.CLICK, this.closeChecklistReply, this);
+      this.checklistReplyBox?.on(Button.EventType.CLICK, this.closeChecklistReply, this);
     }
+    this.shutterHitButton?.node.on(Button.EventType.CLICK, this.handleShutterHitClick, this);
     this.denyHitButton?.node.on(Button.EventType.CLICK, this.handleConsoleDenyClick, this);
     this.allowHitButton?.node.on(Button.EventType.CLICK, this.handleAllowDecisionClick, this);
     this.carterGameOverRetryHit?.on(Button.EventType.CLICK, this.handleCarterGameOverRetryClick, this);
@@ -1714,9 +2287,25 @@ export class EvidencePreviewController extends Component {
     this.guidanceHelpButton?.node.on(Button.EventType.CLICK, this.handleGuidanceHelpButtonClick, this);
     this.guidanceHintButton?.node.on(Button.EventType.CLICK, this.handleGuidanceHintButtonClick, this);
     this.guidanceCloseHitButton?.node.on(Button.EventType.CLICK, this.handleGuidanceCloseButtonClick, this);
+    this.day0EndingFinalChoiceKeepButton?.node.on(
+      Button.EventType.CLICK,
+      this.handleDay0EndingFinalChoiceKeepSelected,
+      this,
+    );
+    this.day0EndingFinalChoiceRemoveButton?.node.on(
+      Button.EventType.CLICK,
+      this.handleDay0EndingFinalChoiceRemoveSelected,
+      this,
+    );
+    this.day0EndingResultReturnHomeButton?.node.on(
+      Button.EventType.CLICK,
+      this.handleDay0EndingResultReturnHome,
+      this,
+    );
   }
 
   onDisable(): void {
+    this.employeeFilesController?.setDay0EndingArchiveRevealDetailClosedCallback(null);
     this.gameReturnHomeButtonHit?.off(Node.EventType.TOUCH_START, this.handleGameReturnHomeTouchStart, this);
     this.gameReturnHomeButtonHit?.off(Node.EventType.TOUCH_END, this.handleGameReturnHomeTouchEnd, this);
     if (this.gameReturnHomeButtonRuntime?.isValid) {
@@ -1729,6 +2318,7 @@ export class EvidencePreviewController extends Component {
     this.employeeCardHit?.off(Node.EventType.TOUCH_END, this.openEmployeeCard, this);
     this.applicationFormHit?.off(Node.EventType.TOUCH_END, this.openApplicationForm, this);
     this.screeningChecklistHit?.off(Node.EventType.TOUCH_END, this.openScreeningChecklist, this);
+    this.telephoneHit?.off(Node.EventType.TOUCH_END, this.handleDay0EndingTelephoneTouch, this, true);
     this.employeeCardCloseHit?.off(Node.EventType.TOUCH_END, this.onClosePreviewClick, this);
     this.applicationFormCloseHit?.off(Button.EventType.CLICK, this.onClosePreviewClick, this);
     this.screeningChecklistCloseHit?.off(Button.EventType.CLICK, this.onClosePreviewClick, this);
@@ -1749,7 +2339,9 @@ export class EvidencePreviewController extends Component {
     }
     if (this.checklistReplyUiReady) {
       this.checklistReplyContinueHit?.off(Button.EventType.CLICK, this.closeChecklistReply, this);
+      this.checklistReplyBox?.off(Button.EventType.CLICK, this.closeChecklistReply, this);
     }
+    this.shutterHitButton?.node.off(Button.EventType.CLICK, this.handleShutterHitClick, this);
     this.denyHitButton?.node.off(Button.EventType.CLICK, this.handleConsoleDenyClick, this);
     this.allowHitButton?.node.off(Button.EventType.CLICK, this.handleAllowDecisionClick, this);
     this.carterGameOverRetryHit?.off(Button.EventType.CLICK, this.handleCarterGameOverRetryClick, this);
@@ -1757,6 +2349,24 @@ export class EvidencePreviewController extends Component {
     this.guidanceHelpButton?.node.off(Button.EventType.CLICK, this.handleGuidanceHelpButtonClick, this);
     this.guidanceHintButton?.node.off(Button.EventType.CLICK, this.handleGuidanceHintButtonClick, this);
     this.guidanceCloseHitButton?.node.off(Button.EventType.CLICK, this.handleGuidanceCloseButtonClick, this);
+    this.day0EndingFinalChoiceKeepButton?.node.off(
+      Button.EventType.CLICK,
+      this.handleDay0EndingFinalChoiceKeepSelected,
+      this,
+    );
+    this.day0EndingFinalChoiceRemoveButton?.node.off(
+      Button.EventType.CLICK,
+      this.handleDay0EndingFinalChoiceRemoveSelected,
+      this,
+    );
+    this.day0EndingResultReturnHomeButton?.node.off(
+      Button.EventType.CLICK,
+      this.handleDay0EndingResultReturnHome,
+      this,
+    );
+    this.setDay0EndingResultVisible(false);
+    this.day0EndingResultKind = null;
+    this.day0EndingResultReturnLocked = false;
     if (this.evidencePreviewRuntime?.isValid) {
       hideInteractivePanelImmediate(this.evidencePreviewRuntime, {
         setInteractable: (interactable) => this.setEvidencePreviewPanelInteractable(interactable),
@@ -1765,7 +2375,7 @@ export class EvidencePreviewController extends Component {
     this.hideGuidancePanelImmediate(false);
     this.unschedule(this.handleCleanupTransitionComplete);
     this.cleanupTransitionScheduled = false;
-    this.inspectionDecisionResolutionInProgress = false;
+    this.setInspectionDecisionResolutionInProgress(false, 'on-disable');
     this.administrativeGameOverActive = false;
     this.currentAdministrativeGameOverReason = null;
     this.activeGameOverContext = null;
@@ -1776,10 +2386,13 @@ export class EvidencePreviewController extends Component {
     this.clearReviveCheckpoint();
     this.invalidateInternalContaminationVisuals();
     this.resetCarterMonsterFlow(true);
+    this.cleanupDay0EndingPhonePhase1State();
   }
 
   onDestroy(): void {
     this.isDestroying = true;
+    HomeSceneController.hidePersistentLoadingOverlay();
+    this.employeeFilesController?.setDay0EndingArchiveRevealDetailClosedCallback(null);
     this.gameReturnHomeButtonLoadGeneration += 1;
     this.gameReturnHomeInProgress = false;
     if (this.gameReturnHomeButtonRuntime?.isValid) {
@@ -1793,6 +2406,14 @@ export class EvidencePreviewController extends Component {
     this.hideGuidancePanelImmediate(false);
     this.gameReturnHomeButtonHit?.off(Node.EventType.TOUCH_START, this.handleGameReturnHomeTouchStart, this);
     this.gameReturnHomeButtonHit?.off(Node.EventType.TOUCH_END, this.handleGameReturnHomeTouchEnd, this);
+    this.day0EndingResultReturnHomeButton?.node.off(
+      Button.EventType.CLICK,
+      this.handleDay0EndingResultReturnHome,
+      this,
+    );
+    this.setDay0EndingResultVisible(false);
+    this.day0EndingResultKind = null;
+    this.day0EndingResultReturnLocked = false;
     this.invalidateVisitorVisualPresentation();
     this.campaignDayTransitionInProgress = false;
     this.campaignDayCompletionPending = false;
@@ -1805,7 +2426,7 @@ export class EvidencePreviewController extends Component {
     this.dayCompletionOverlayController = null;
     this.unschedule(this.handleCleanupTransitionComplete);
     this.cleanupTransitionScheduled = false;
-    this.inspectionDecisionResolutionInProgress = false;
+    this.setInspectionDecisionResolutionInProgress(false, 'on-destroy');
     this.administrativeGameOverActive = false;
     this.currentAdministrativeGameOverReason = null;
     this.activeGameOverContext = null;
@@ -1818,9 +2439,9 @@ export class EvidencePreviewController extends Component {
     this.resetCarterMonsterFlow(true);
     this.setActiveVisitorKeyForDepartmentPhone(null);
     this.telephoneController?.setDepartmentPhoneContextProvider(null);
-    this.telephoneController?.setDepartmentPhoneLookupEnabled(false);
     this.activeAppointmentRosterDay = null;
     this.resetActiveDayQueueState();
+    this.cleanupDay0EndingPhonePhase1LocalState();
   }
 
   private ensureGameReturnHomeButtonRuntime(canvas: Node): void {
@@ -1880,6 +2501,24 @@ export class EvidencePreviewController extends Component {
     void this.loadGameReturnHomeButtonSpriteFrame();
   }
 
+  private ensureGameSettingsPanelController(canvas: Node): void {
+    if (!canvas?.isValid) {
+      return;
+    }
+    let settingsRoot = canvas.getChildByName('GameSettingsRootRuntime');
+    if (!settingsRoot || !settingsRoot.isValid) {
+      settingsRoot = new Node('GameSettingsRootRuntime');
+      settingsRoot.parent = canvas;
+    }
+    settingsRoot.layer = canvas.layer;
+    const transform = settingsRoot.getComponent(UITransform) ?? settingsRoot.addComponent(UITransform);
+    transform.setAnchorPoint(0.5, 0.5);
+    transform.setContentSize(1, 1);
+    settingsRoot.setPosition(0, 0, 0);
+    const controller = settingsRoot.getComponent(SettingsPanelController) ?? settingsRoot.addComponent(SettingsPanelController);
+    this.gameSettingsPanelController = controller;
+  }
+
   private applyGameReturnHomeButtonLayerOrder(canvas: Node): void {
     if (!this.gameReturnHomeButtonRuntime?.isValid || this.gameReturnHomeButtonRuntime.parent !== canvas) {
       return;
@@ -1900,18 +2539,8 @@ export class EvidencePreviewController extends Component {
     if (!canvasTransform || !hitTransform) {
       return;
     }
-    const canvasWidth = canvasTransform.contentSize.width;
-    const canvasHeight = canvasTransform.contentSize.height;
-    const hitWidth = hitTransform.contentSize.width;
-    const hitHeight = hitTransform.contentSize.height;
-    const x =
-      -canvasWidth * 0.5 +
-      EvidencePreviewController.RETURN_HOME_BUTTON_MARGIN_LEFT +
-      hitWidth * 0.5;
-    const y =
-      canvasHeight * 0.5 -
-      EvidencePreviewController.RETURN_HOME_BUTTON_MARGIN_TOP -
-      hitHeight * 0.5;
+    const x = -300;
+    const y = 585;
     this.gameReturnHomeButtonRuntime.setPosition(x, y, 0);
     this.gameReturnHomeButtonRuntime.setScale(this.gameReturnHomeBaseScale);
   }
@@ -2002,17 +2631,25 @@ export class EvidencePreviewController extends Component {
         if (!this.isValid || this.isDestroying) {
           return;
         }
-        director.loadScene(EvidencePreviewController.RETURN_HOME_SCENE_NAME, (error) => {
-          if (!error) {
-            return;
-          }
-          console.error('[EvidencePreviewController] Failed to load HomeScene from return-home button.', error);
+        const settingsController = this.gameSettingsPanelController?.isValid
+          ? this.gameSettingsPanelController
+          : null;
+        if (!settingsController) {
+          console.warn('[EvidencePreviewController] SettingsPanelController is unavailable in GameScene.');
           this.gameReturnHomeInProgress = false;
           if (this.gameReturnHomeButtonRuntime?.isValid) {
             this.gameReturnHomeButtonRuntime.setScale(this.gameReturnHomeBaseScale);
           }
           this.setGameReturnHomeButtonInteractable(true);
-        });
+          return;
+        }
+
+        settingsController.openSettingsFromExternalTrigger();
+        this.gameReturnHomeInProgress = false;
+        if (this.gameReturnHomeButtonRuntime?.isValid) {
+          this.gameReturnHomeButtonRuntime.setScale(this.gameReturnHomeBaseScale);
+        }
+        this.setGameReturnHomeButtonInteractable(true);
       })
       .start();
   }
@@ -2029,8 +2666,52 @@ export class EvidencePreviewController extends Component {
       this.checklistActionButton.interactable = interactable;
     }
     if (this.checklistReplyContinueButton) {
-      this.checklistReplyContinueButton.interactable = interactable && this.checklistReplyCanClose;
+      this.checklistReplyContinueButton.interactable = interactable;
     }
+    if (this.checklistReplyBoxButton) {
+      this.checklistReplyBoxButton.interactable = interactable;
+    }
+  }
+
+  private recoverEvidencePreviewPanelStateIfDesynced(reason: string): void {
+    const runtime = this.evidencePreviewRuntime;
+    if (!runtime?.isValid) {
+      return;
+    }
+    const panelState = getInteractivePanelState(runtime);
+    if (runtime.active || panelState === 'hidden') {
+      return;
+    }
+    this.logInteractionTrace('preview-panel-state-recovered', {
+      reason,
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+      panelState,
+      runtimeActive: runtime.active,
+    });
+    hideInteractivePanelImmediate(runtime, {
+      setInteractable: (interactable) => this.setEvidencePreviewPanelInteractable(interactable),
+    });
+  }
+
+  private hideEvidencePreviewRuntimeImmediate(reason: string): void {
+    const runtime = this.evidencePreviewRuntime;
+    if (!runtime?.isValid) {
+      return;
+    }
+    const panelStateBefore = getInteractivePanelState(runtime);
+    hideInteractivePanelImmediate(runtime, {
+      setInteractable: (interactable) => this.setEvidencePreviewPanelInteractable(interactable),
+    });
+    this.logInteractionTrace('preview-runtime-hide-immediate', {
+      reason,
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+      panelStateBefore,
+      runtimeActiveAfter: runtime.active,
+    });
   }
 
   private ensureGuidanceOverlayRuntime(canvas: Node): void {
@@ -2643,12 +3324,29 @@ export class EvidencePreviewController extends Component {
   }
 
   private handleGuidanceHelpButtonClick = (): void => {
+    if (!this.guidanceHelpButton?.interactable || !this.canOpenGuidancePanel()) {
+      return;
+    }
+    this.playGuidanceSettingsClickSound();
     this.openInspectionGuide();
   };
 
   private handleGuidanceHintButtonClick = (): void => {
+    if (!this.guidanceHintButton?.interactable || !this.canOpenGuidancePanel()) {
+      return;
+    }
+    this.playGuidanceSettingsClickSound();
     this.openCurrentInspectionHint();
   };
+
+  private playGuidanceSettingsClickSound(): void {
+    const audio = AudioManager.getInstance();
+    if (!audio) {
+      return;
+    }
+    audio.playCachedSettingsClick();
+    audio.handleUserGesture();
+  }
 
   private handleGuidanceCloseButtonClick = (): void => {
     this.closeGuidancePanel();
@@ -2741,6 +3439,8 @@ export class EvidencePreviewController extends Component {
       this.guidancePanel,
       () => {
         if (!this.guidanceOverlayRuntime?.isValid || !this.guidanceDimmerOpacity?.isValid) {
+          // Never leave interaction lock active if runtime nodes changed unexpectedly.
+          this.clearGuidancePanelState(true);
           return;
         }
         Tween.stopAllByTarget(this.guidanceDimmerOpacity);
@@ -2748,6 +3448,7 @@ export class EvidencePreviewController extends Component {
           .to(0.08, { opacity: 0 }, { easing: 'linear' })
           .call(() => {
             if (!this.guidanceOverlayRuntime?.isValid) {
+              this.clearGuidancePanelState(true);
               return;
             }
             this.guidanceOverlayRuntime.active = false;
@@ -2821,8 +3522,6 @@ export class EvidencePreviewController extends Component {
       this.guidancePanelInputLocked = true;
       this.captureEncounterButtonStates();
       this.setAllEncounterButtonsInteractable(false);
-      this.telephoneController?.setTelephoneEntryEnabled(false);
-      this.shutterController?.setInteractionEnabled(false);
       if (this.guidanceHelpButton?.node?.isValid) {
         this.guidanceHelpButton.interactable = false;
       }
@@ -2836,7 +3535,15 @@ export class EvidencePreviewController extends Component {
     }
     this.guidancePanelInputLocked = false;
     this.restoreEncounterButtonStates();
-    this.refreshCampaignEvidenceAvailability();
+    this.setTelephoneEntryEnabledForInteractionTrace(
+      this.getCachedButtonInteractable('TelephoneHit'),
+      'guidance-panel-close-restore',
+    );
+    this.setShutterInteractionEnabledForInteractionTrace(
+      this.getCachedButtonInteractable('BtnShutterHit'),
+      'guidance-panel-close-restore',
+    );
+    this.refreshCampaignEvidenceAvailability('campaign-evidence-refresh');
   }
 
   private updateGuidanceContent(mode: GuidancePanelMode): void {
@@ -2915,22 +3622,80 @@ export class EvidencePreviewController extends Component {
         ? getVisitorProfile(activeSubject.visitorKey)?.displayName ?? activeSubject.visitorKey.toUpperCase()
         : EMPLOYEE_PROFILES[activeSubject.round.employeeKey]?.displayName ??
           activeSubject.round.employeeKey.toUpperCase());
+    if (
+      activeSubject.subjectKind === 'employee' &&
+      !this.isGuidanceHintEmployeeRoundAligned(activeSubject.round.roundId)
+    ) {
+      console.warn('[GuidanceHint] Employee hint round mismatch detected.', {
+        activeSubjectRoundId: activeSubject.round.roundId,
+        currentRoundId: this.currentRound?.roundId ?? null,
+        activeSubjectEmployeeKey: activeSubject.round.employeeKey,
+        currentRoundEmployeeKey: this.currentRound?.employeeKey ?? null,
+      });
+      return {
+        subjectLine: `SUBJECT: ${subjectDisplayName.toUpperCase()}`,
+        statusLine: 'INSPECTION DATA IS UPDATING',
+        statusColor: new Color(112, 92, 74, 255),
+        body: 'INSPECTION DATA IS UPDATING. PLEASE CHECK AGAIN.',
+        layoutIssueCount: 0,
+        hideSubjectLabel: false,
+      };
+    }
     const resolvedIssueKinds = this.resolveGuidanceIssueKindsForActiveSubject(activeSubject);
     const orderedIssueKinds = EvidencePreviewController.GUIDANCE_ISSUE_ORDER.filter((kind) =>
       resolvedIssueKinds.includes(kind),
     );
+    const employeeRawHasFailure =
+      activeSubject.subjectKind === 'employee'
+        ? this.hasEmployeeGuidanceRawFailure(activeSubject.round)
+        : false;
     const threatDetected =
       activeSubject.subjectKind === 'visitor'
         ? activeSubject.caseKind === 'disguised-monster-visitor'
         : activeSubject.round.caseKind === 'DISGUISED_MONSTER';
     if (orderedIssueKinds.length <= 0) {
+      if (activeSubject.subjectKind === 'employee') {
+        if (employeeRawHasFailure) {
+          console.warn('[GuidanceHint] Employee round has raw failures but resolved issue kinds are empty.', {
+            dayIndex: this.getActiveCampaignDayIndex(),
+            roundId: activeSubject.round.roundId,
+            employeeKey: activeSubject.round.employeeKey,
+            caseKind: activeSubject.round.caseKind,
+            cardFailedFields: [...activeSubject.round.card.failedFields],
+            applicationFailedFields: [...activeSubject.round.application.failedFields],
+            appearanceFailedRuleKeys: [...activeSubject.round.appearance.failedRuleKeys],
+          });
+          return {
+            subjectLine: `SUBJECT: ${subjectDisplayName.toUpperCase()}`,
+            statusLine: 'PROBLEM FOUND',
+            statusColor: new Color(128, 58, 49, 255),
+            body: 'A threat has been detected, but the exact inconsistency is not currently available.',
+            layoutIssueCount: 0,
+            hideSubjectLabel: false,
+          };
+        }
+        return {
+          subjectLine: `SUBJECT: ${subjectDisplayName.toUpperCase()}`,
+          statusLine: 'NO PROBLEM FOUND',
+          statusColor: new Color(71, 108, 79, 255),
+          body: 'This person appears to be innocent.\n\nAll required checks match the official records.',
+          layoutIssueCount: 0,
+          hideSubjectLabel: false,
+        };
+      }
       if (threatDetected) {
         console.warn('[GuidanceHint] Threat detected without resolved issue kinds.', {
-          subjectKey:
-            activeSubject.subjectKind === 'visitor'
-              ? activeSubject.visitorKey
-              : activeSubject.round.employeeKey,
-          roundId: activeSubject.subjectKind === 'visitor' ? activeSubject.roundId : activeSubject.round.roundId,
+          activeSubjectRoundId:
+            activeSubject.subjectKind === 'visitor' ? activeSubject.roundId : activeSubject.round.roundId,
+          currentRoundId: this.currentRound?.roundId ?? null,
+          activeSubjectEmployeeKey:
+            activeSubject.subjectKind === 'visitor' ? activeSubject.visitorKey : activeSubject.round.employeeKey,
+          currentRoundEmployeeKey: this.currentRound?.employeeKey ?? null,
+          activeSubjectTruthSummary:
+            activeSubject.subjectKind === 'employee'
+              ? this.buildGuidanceHintTruthSummary(activeSubject.round.truth)
+              : null,
+          currentRoundTruthSummary: this.buildGuidanceHintTruthSummary(this.currentRound?.truth ?? null),
           subjectKind: activeSubject.subjectKind,
           resolvedIssueKinds,
         });
@@ -2985,23 +3750,82 @@ export class EvidencePreviewController extends Component {
         }
         return 'purpose';
       }) as Exclude<DecisionIssueKind, 'monster'>[];
-      return Object.freeze([...new Set(mapped)]);
+      return Object.freeze(Array.from(new Set(mapped)));
     }
+    this.warnGuidanceHintRawTruthMismatch(subject.round);
+    return this.resolveEmployeeGuidanceIssueKindsFromRawRound(subject.round);
+  }
+
+  private isGuidanceHintEmployeeRoundAligned(subjectRoundId: string): boolean {
+    return this.currentRound?.roundId === subjectRoundId;
+  }
+
+  private resolveEmployeeGuidanceIssueKindsFromRawRound(
+    round: RoundInstance,
+  ): readonly Exclude<DecisionIssueKind, 'monster'>[] {
     const issueKinds: Exclude<DecisionIssueKind, 'monster'>[] = [];
-    for (const key of this.getRequiredChecklistItemKeys()) {
-      const truthPass = this.getRequiredEvidenceTruthPass(key);
-      if (truthPass) {
-        continue;
-      }
-      if (key === 'id_card') {
-        issueKinds.push('id-card');
-      } else if (key === 'application') {
-        issueKinds.push('application');
-      } else {
-        issueKinds.push('appearance');
-      }
+    if (round.card.failedFields.length > 0) {
+      issueKinds.push('id-card');
     }
-    return Object.freeze([...new Set(issueKinds)]);
+    if (round.application.failedFields.length > 0) {
+      issueKinds.push('application');
+    }
+    if (round.appearance.failedRuleKeys.length > 0) {
+      issueKinds.push('appearance');
+    }
+    return Object.freeze(Array.from(new Set(issueKinds)));
+  }
+
+  private hasEmployeeGuidanceRawFailure(round: RoundInstance): boolean {
+    return (
+      round.card.failedFields.length > 0 ||
+      round.application.failedFields.length > 0 ||
+      round.appearance.failedRuleKeys.length > 0
+    );
+  }
+
+  private warnGuidanceHintRawTruthMismatch(round: RoundInstance): void {
+    const rawCardFail = round.card.failedFields.length > 0;
+    const rawApplicationFail = round.application.failedFields.length > 0;
+    const rawAppearanceFail = round.appearance.failedRuleKeys.length > 0;
+    const mismatchDetected =
+      rawCardFail === round.truth.cardPass ||
+      rawApplicationFail === round.truth.applicationPass ||
+      rawAppearanceFail === round.truth.appearancePass;
+    if (!mismatchDetected) {
+      return;
+    }
+    console.warn('[GuidanceHint] Round raw anomaly metadata disagrees with derived truth.', {
+      dayIndex: this.getActiveCampaignDayIndex(),
+      employeeKey: round.employeeKey,
+      roundId: round.roundId,
+      caseKind: round.caseKind,
+      cardFailedFields: [...round.card.failedFields],
+      applicationFailedFields: [...round.application.failedFields],
+      appearanceFailedRuleKeys: [...round.appearance.failedRuleKeys],
+      truthSummary: this.buildGuidanceHintTruthSummary(round.truth),
+    });
+  }
+
+  private buildGuidanceHintTruthSummary(
+    truth: RoundInstance['truth'] | null,
+  ): Readonly<{
+    cardPass: boolean | null;
+    applicationPass: boolean | null;
+    appearancePass: boolean | null;
+  }> {
+    if (!truth) {
+      return Object.freeze({
+        cardPass: null,
+        applicationPass: null,
+        appearancePass: null,
+      });
+    }
+    return Object.freeze({
+      cardPass: truth.cardPass,
+      applicationPass: truth.applicationPass,
+      appearancePass: truth.appearancePass,
+    });
   }
 
   private isHintNoActiveInspectionState(): boolean {
@@ -3048,15 +3872,79 @@ export class EvidencePreviewController extends Component {
     AudioManager.getInstance()?.playCachedDecisionMark();
   }
 
-  private openEmployeeCard(): void {
+  private traceRepresentativeClickReceived(control: 'employee-card' | 'allow' | 'checklist'): void {
+    this.logInteractionTrace('click-received', {
+      control,
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+      inspectionResolutionInProgress: this.inspectionDecisionResolutionInProgress,
+    });
+  }
+
+  private traceRepresentativeClickBlocked(
+    control: 'employee-card' | 'allow' | 'checklist',
+    reason: string,
+  ): void {
+    const previewRuntimeActive = this.evidencePreviewRuntime?.active ?? false;
+    const employeeDetailActive = this.employeeCardDetailVisual?.active ?? false;
+    const applicationDetailActive = this.applicationFormDetailVisual?.active ?? false;
+    const checklistDetailActive = this.screeningChecklistDetailVisual?.active ?? false;
+    this.logInteractionTrace('click-blocked', {
+      control,
+      reason,
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+      inspectionResolutionInProgress: this.inspectionDecisionResolutionInProgress,
+      previewOpen: this.previewOpen,
+      previewRuntimeActive,
+      employeeDetailActive,
+      applicationDetailActive,
+      checklistDetailActive,
+    });
+  }
+
+  private resolveEmployeeCardClickBlockedReason(): string | null {
+    if (!this.isCampaignEvidenceEnabled('employee-card')) {
+      return 'evidence-disabled';
+    }
+    if (this.previewOpen) {
+      return 'preview-open';
+    }
     if (
-      !this.isCampaignEvidenceEnabled('employee-card') ||
-      this.previewOpen ||
       !this.evidencePreviewRuntime ||
       !this.employeeCardDetailVisual ||
       !this.applicationFormDetailVisual ||
       !this.screeningChecklistDetailVisual
     ) {
+      return 'missing-runtime-node';
+    }
+    return null;
+  }
+
+  private resolveChecklistClickBlockedReason(): string | null {
+    if (this.previewOpen) {
+      return 'preview-open';
+    }
+    if (
+      !this.evidencePreviewRuntime ||
+      !this.employeeCardDetailVisual ||
+      !this.applicationFormDetailVisual ||
+      !this.screeningChecklistDetailVisual
+    ) {
+      return 'missing-runtime-node';
+    }
+    return null;
+  }
+
+  private openEmployeeCard(): void {
+    this.logDay4DocumentClickReceived('employee-card');
+    this.traceRepresentativeClickReceived('employee-card');
+    const blockedReason = this.resolveEmployeeCardClickBlockedReason();
+    if (blockedReason) {
+      this.logDay4DocumentClickBlocked('employee-card', blockedReason);
+      this.traceRepresentativeClickBlocked('employee-card', blockedReason);
       return;
     }
 
@@ -3075,22 +3963,50 @@ export class EvidencePreviewController extends Component {
     this.employeeCardDetailVisual.active = true;
     this.applicationFormDetailVisual.active = false;
     this.screeningChecklistDetailVisual.active = false;
+    this.recoverEvidencePreviewPanelStateIfDesynced('open-employee-card');
     showInteractivePanel(this.evidencePreviewRuntime, {
       setInteractable: (interactable) => this.setEvidencePreviewPanelInteractable(interactable),
     });
-    this.setManagedButtonsInteractable(false);
+    this.setManagedButtonsInteractable(false, 'preview-open-employee-card');
     this.previewOpen = true;
+    this.logInteractionTrace('preview-open-visual-state', {
+      control: 'employee-card',
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+      previewOpen: this.previewOpen,
+      previewRuntimeActive: this.evidencePreviewRuntime?.active ?? false,
+      employeeDetailActive: this.employeeCardDetailVisual?.active ?? false,
+      applicationDetailActive: this.applicationFormDetailVisual?.active ?? false,
+      checklistDetailActive: this.screeningChecklistDetailVisual?.active ?? false,
+      panelState: getInteractivePanelState(this.evidencePreviewRuntime),
+    });
+    this.logInteractionStateSnapshot('preview-open-employee-card');
   }
 
-  private openApplicationForm(): void {
+  private resolveApplicationFormClickBlockedReason(): string | null {
+    if (!this.isCampaignEvidenceEnabled('application-form')) {
+      return 'evidence-disabled';
+    }
+    if (this.previewOpen) {
+      return 'preview-open';
+    }
     if (
-      !this.isCampaignEvidenceEnabled('application-form') ||
-      this.previewOpen ||
       !this.evidencePreviewRuntime ||
       !this.employeeCardDetailVisual ||
       !this.applicationFormDetailVisual ||
       !this.screeningChecklistDetailVisual
     ) {
+      return 'missing-runtime-node';
+    }
+    return null;
+  }
+
+  private openApplicationForm(): void {
+    this.logDay4DocumentClickReceived('application-form');
+    const blockedReason = this.resolveApplicationFormClickBlockedReason();
+    if (blockedReason) {
+      this.logDay4DocumentClickBlocked('application-form', blockedReason);
       return;
     }
 
@@ -3109,21 +4025,19 @@ export class EvidencePreviewController extends Component {
     this.employeeCardDetailVisual.active = false;
     this.applicationFormDetailVisual.active = true;
     this.screeningChecklistDetailVisual.active = false;
+    this.recoverEvidencePreviewPanelStateIfDesynced('open-application-form');
     showInteractivePanel(this.evidencePreviewRuntime, {
       setInteractable: (interactable) => this.setEvidencePreviewPanelInteractable(interactable),
     });
-    this.setManagedButtonsInteractable(false);
+    this.setManagedButtonsInteractable(false, 'preview-open-application-form');
     this.previewOpen = true;
   }
 
   private openScreeningChecklist(): void {
-    if (
-      this.previewOpen ||
-      !this.evidencePreviewRuntime ||
-      !this.employeeCardDetailVisual ||
-      !this.applicationFormDetailVisual ||
-      !this.screeningChecklistDetailVisual
-    ) {
+    this.traceRepresentativeClickReceived('checklist');
+    const blockedReason = this.resolveChecklistClickBlockedReason();
+    if (blockedReason) {
+      this.traceRepresentativeClickBlocked('checklist', blockedReason);
       return;
     }
 
@@ -3141,6 +4055,7 @@ export class EvidencePreviewController extends Component {
     this.employeeCardDetailVisual.active = false;
     this.applicationFormDetailVisual.active = false;
     this.screeningChecklistDetailVisual.active = true;
+    this.recoverEvidencePreviewPanelStateIfDesynced('open-checklist');
     showInteractivePanel(this.evidencePreviewRuntime, {
       setInteractable: (interactable) => this.setEvidencePreviewPanelInteractable(interactable),
     });
@@ -3150,28 +4065,92 @@ export class EvidencePreviewController extends Component {
         this.refreshChecklistVisuals();
       }
     }
-    this.setManagedButtonsInteractable(false);
+    this.setManagedButtonsInteractable(false, 'preview-open-checklist');
     this.previewOpen = true;
+    this.logInteractionTrace('preview-open-visual-state', {
+      control: 'checklist',
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+      previewOpen: this.previewOpen,
+      previewRuntimeActive: this.evidencePreviewRuntime?.active ?? false,
+      employeeDetailActive: this.employeeCardDetailVisual?.active ?? false,
+      applicationDetailActive: this.applicationFormDetailVisual?.active ?? false,
+      checklistDetailActive: this.screeningChecklistDetailVisual?.active ?? false,
+      panelState: getInteractivePanelState(this.evidencePreviewRuntime),
+    });
+    this.logInteractionStateSnapshot('preview-open-checklist');
   }
 
   /** Player-clicked X on document preview; play UI click then close. */
   private onClosePreviewClick(): void {
+    if (this.day0EndingTelephoneStoryLock) {
+      this.logInteractionTrace('preview-close-blocked', {
+        reason: 'day0-ending-telephone-story-lock',
+        day: this.getActiveCampaignDayIndex(),
+        subject: this.getActiveSubjectKeyForInteractionTrace(),
+        generation: this.decisionResolutionToken,
+        previewOpen: this.previewOpen,
+      });
+      return;
+    }
+    this.logInteractionTrace('preview-close-click-received', {
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+      previewOpen: this.previewOpen,
+      panelInteractable: this.previewPanelInteractable,
+    });
     AudioManager.getInstance()?.playCachedSettingsClick();
     this.closePreview();
   }
 
   private closePreview(): void {
-    if (
+    const runtimeNodeMissing =
       !this.evidencePreviewRuntime ||
       !this.employeeCardDetailVisual ||
       !this.applicationFormDetailVisual ||
-      !this.screeningChecklistDetailVisual
-    ) {
+      !this.screeningChecklistDetailVisual;
+    if (runtimeNodeMissing) {
+      this.logInteractionTrace('preview-close-blocked', {
+        reason: 'missing-runtime-node',
+        day: this.getActiveCampaignDayIndex(),
+        subject: this.getActiveSubjectKeyForInteractionTrace(),
+        generation: this.decisionResolutionToken,
+        previewOpen: this.previewOpen,
+      });
       return;
     }
-    if (!this.previewPanelInteractable || getInteractivePanelState(this.evidencePreviewRuntime) === 'closing') {
+    const panelState = getInteractivePanelState(this.evidencePreviewRuntime);
+    if (!this.previewPanelInteractable) {
+      this.logInteractionTrace('preview-close-blocked', {
+        reason: 'preview-panel-not-interactable',
+        day: this.getActiveCampaignDayIndex(),
+        subject: this.getActiveSubjectKeyForInteractionTrace(),
+        generation: this.decisionResolutionToken,
+        previewOpen: this.previewOpen,
+        panelState,
+      });
       return;
     }
+    if (panelState === 'closing') {
+      this.logInteractionTrace('preview-close-blocked', {
+        reason: 'panel-already-closing',
+        day: this.getActiveCampaignDayIndex(),
+        subject: this.getActiveSubjectKeyForInteractionTrace(),
+        generation: this.decisionResolutionToken,
+        previewOpen: this.previewOpen,
+        panelState,
+      });
+      return;
+    }
+    this.logInteractionTrace('preview-close-start', {
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+      previewOpen: this.previewOpen,
+      panelState,
+    });
 
     this.drawScrim(170);
     if (this.checklistQuestionPanelRuntime) {
@@ -3190,14 +4169,36 @@ export class EvidencePreviewController extends Component {
       this.evidencePreviewRuntime,
       () => {
         if (!this.evidencePreviewRuntime?.isValid) {
+          this.logInteractionTrace('preview-close-blocked', {
+            reason: 'runtime-invalid-in-callback',
+            day: this.getActiveCampaignDayIndex(),
+            subject: this.getActiveSubjectKeyForInteractionTrace(),
+            generation: this.decisionResolutionToken,
+          });
           return;
         }
         this.employeeCardDetailVisual!.active = false;
         this.applicationFormDetailVisual!.active = false;
         this.screeningChecklistDetailVisual!.active = false;
-        this.setManagedButtonsInteractable(true);
+        if (
+          this.day0EndingDisplayTestActive &&
+          this.day0EndingArchiveRevealActive &&
+          !this.day0EndingFinalChoiceActive
+        ) {
+          this.previewOpen = false;
+          this.enterDay0EndingFinalChoice();
+          return;
+        }
+        this.setManagedButtonsInteractable(true, 'preview-close');
         this.previewOpen = false;
-        this.refreshCampaignEvidenceAvailability();
+        this.refreshCampaignEvidenceAvailability('preview-close');
+        this.logInteractionTrace('preview-close-finished', {
+          day: this.getActiveCampaignDayIndex(),
+          subject: this.getActiveSubjectKeyForInteractionTrace(),
+          generation: this.decisionResolutionToken,
+          previewOpen: this.previewOpen,
+        });
+        this.logInteractionStateSnapshot('preview-close-finished');
       },
       {
         setInteractable: (interactable) => this.setEvidencePreviewPanelInteractable(interactable),
@@ -3212,6 +4213,603 @@ export class EvidencePreviewController extends Component {
     this.playDecisionMarkSound();
     this.idCardChoice = this.idCardChoice === 'pass' ? 'unset' : 'pass';
     this.refreshChecklistVisuals();
+  }
+
+  private ensureDay0EndingFinalChoiceRuntime(): void {
+    let runtime = this.node.getChildByName('Day0EndingFinalChoiceRuntime');
+    if (!runtime || !runtime.isValid) {
+      runtime = new Node('Day0EndingFinalChoiceRuntime');
+      runtime.parent = this.node;
+    }
+    const runtimeTransform = runtime.getComponent(UITransform) ?? runtime.addComponent(UITransform);
+    runtimeTransform.setAnchorPoint(0.5, 0.5);
+    runtimeTransform.setContentSize(
+      EvidencePreviewController.DAY0_ENDING_FINAL_CHOICE_RUNTIME_WIDTH,
+      EvidencePreviewController.DAY0_ENDING_FINAL_CHOICE_RUNTIME_HEIGHT,
+    );
+    runtime.setPosition(
+      EvidencePreviewController.DAY0_ENDING_FINAL_CHOICE_RUNTIME_X,
+      EvidencePreviewController.DAY0_ENDING_FINAL_CHOICE_RUNTIME_Y,
+      0,
+    );
+    const optionStep =
+      EvidencePreviewController.DAY0_ENDING_FINAL_CHOICE_OPTION_HEIGHT +
+      EvidencePreviewController.DAY0_ENDING_FINAL_CHOICE_VERTICAL_GAP;
+    const topY = optionStep * 0.5;
+    const bottomY = -optionStep * 0.5;
+
+    const keepHit = this.ensureDay0EndingFinalChoiceOption(
+      runtime,
+      'Day0EndingChoiceKeepIdentityHit',
+      EvidencePreviewController.DAY0_ENDING_FINAL_CHOICE_KEEP_TEXT,
+      0,
+      topY,
+    );
+    const removeHit = this.ensureDay0EndingFinalChoiceOption(
+      runtime,
+      'Day0EndingChoiceRemoveThreatHit',
+      EvidencePreviewController.DAY0_ENDING_FINAL_CHOICE_REMOVE_TEXT,
+      0,
+      bottomY,
+    );
+
+    this.day0EndingFinalChoiceRuntime = runtime;
+    this.day0EndingFinalChoiceKeepHit = keepHit.node;
+    this.day0EndingFinalChoiceRemoveHit = removeHit.node;
+    this.day0EndingFinalChoiceKeepButton = keepHit.button;
+    this.day0EndingFinalChoiceRemoveButton = removeHit.button;
+    this.day0EndingFinalChoiceKeepLabel = keepHit.label;
+    this.day0EndingFinalChoiceRemoveLabel = removeHit.label;
+    this.applyDay0EndingFinalChoiceVisuals();
+    this.setDay0EndingFinalChoiceVisible(false);
+  }
+
+  private ensureDay0EndingFinalChoiceOption(
+    parent: Node,
+    nodeName: string,
+    text: string,
+    x: number,
+    y: number,
+  ): { readonly node: Node; readonly button: Button; readonly label: Label } {
+    let node = parent.getChildByName(nodeName);
+    if (!node || !node.isValid) {
+      node = new Node(nodeName);
+      node.parent = parent;
+    }
+    const transform = node.getComponent(UITransform) ?? node.addComponent(UITransform);
+    transform.setAnchorPoint(0.5, 0.5);
+    transform.setContentSize(
+      EvidencePreviewController.DAY0_ENDING_FINAL_CHOICE_OPTION_WIDTH,
+      EvidencePreviewController.DAY0_ENDING_FINAL_CHOICE_OPTION_HEIGHT,
+    );
+    node.setPosition(x, y, 0);
+    const button = node.getComponent(Button) ?? node.addComponent(Button);
+    button.transition = Button.Transition.NONE;
+    button.interactable = false;
+
+    let labelNode = node.getChildByName('Label');
+    if (!labelNode || !labelNode.isValid) {
+      labelNode = new Node('Label');
+      labelNode.parent = node;
+    }
+    const labelTransform = labelNode.getComponent(UITransform) ?? labelNode.addComponent(UITransform);
+    labelTransform.setAnchorPoint(0.5, 0.5);
+    labelTransform.setContentSize(
+      EvidencePreviewController.DAY0_ENDING_FINAL_CHOICE_OPTION_WIDTH,
+      EvidencePreviewController.DAY0_ENDING_FINAL_CHOICE_OPTION_HEIGHT,
+    );
+    labelNode.setPosition(0, 0, 0);
+    const label = labelNode.getComponent(Label) ?? labelNode.addComponent(Label);
+    label.string = text;
+    label.fontSize = 30;
+    label.lineHeight = 36;
+    label.horizontalAlign = Label.HorizontalAlign.CENTER;
+    label.verticalAlign = Label.VerticalAlign.CENTER;
+    label.overflow = Overflow.SHRINK;
+    label.enableWrapText = false;
+    label.isBold = true;
+    label.color = new Color(233, 225, 212, 255);
+    return { node, button, label };
+  }
+
+  private applyDay0EndingFinalChoiceVisuals(): void {
+    if (this.day0EndingFinalChoiceKeepLabel) {
+      this.day0EndingFinalChoiceKeepLabel.string =
+        EvidencePreviewController.DAY0_ENDING_FINAL_CHOICE_KEEP_TEXT;
+    }
+    if (this.day0EndingFinalChoiceRemoveLabel) {
+      this.day0EndingFinalChoiceRemoveLabel.string =
+        EvidencePreviewController.DAY0_ENDING_FINAL_CHOICE_REMOVE_TEXT;
+    }
+    if (this.day0EndingFinalChoiceRuntime?.isValid && this.node.children.includes(this.day0EndingFinalChoiceRuntime)) {
+      this.day0EndingFinalChoiceRuntime.setSiblingIndex(this.node.children.length - 1);
+    }
+  }
+
+  private setDay0EndingFinalChoiceVisible(visible: boolean): void {
+    if (this.day0EndingFinalChoiceRuntime?.isValid) {
+      this.day0EndingFinalChoiceRuntime.active = visible;
+    }
+    if (this.day0EndingFinalChoiceKeepHit?.isValid) {
+      this.day0EndingFinalChoiceKeepHit.active = visible;
+    }
+    if (this.day0EndingFinalChoiceRemoveHit?.isValid) {
+      this.day0EndingFinalChoiceRemoveHit.active = visible;
+    }
+    const interactable = visible && this.day0EndingFinalChoiceActive;
+    if (this.day0EndingFinalChoiceKeepButton?.node?.isValid) {
+      this.day0EndingFinalChoiceKeepButton.interactable = interactable;
+    }
+    if (this.day0EndingFinalChoiceRemoveButton?.node?.isValid) {
+      this.day0EndingFinalChoiceRemoveButton.interactable = interactable;
+    }
+  }
+
+  private ensureDay0EndingResultRuntime(): void {
+    const runtimeParent = this.node.parent ?? this.node;
+    let runtime = runtimeParent.getChildByName('Day0EndingResultRuntime');
+    if (!runtime || !runtime.isValid) {
+      runtime = new Node('Day0EndingResultRuntime');
+      runtime.parent = runtimeParent;
+    } else if (runtime.parent !== runtimeParent) {
+      runtime.parent = runtimeParent;
+    }
+    const rootTransform = runtimeParent.getComponent(UITransform);
+    const runtimeWidth =
+      rootTransform?.contentSize.width ?? EvidencePreviewController.DAY0_ENDING_RESULT_RUNTIME_WIDTH;
+    const runtimeHeight =
+      rootTransform?.contentSize.height ?? EvidencePreviewController.DAY0_ENDING_RESULT_RUNTIME_HEIGHT;
+    const runtimeTransform = runtime.getComponent(UITransform) ?? runtime.addComponent(UITransform);
+    runtimeTransform.setAnchorPoint(0.5, 0.5);
+    runtimeTransform.setContentSize(runtimeWidth, runtimeHeight);
+    runtime.setPosition(0, 0, 0);
+
+    let inputBlocker = runtime.getChildByName('InputBlocker');
+    if (!inputBlocker || !inputBlocker.isValid) {
+      inputBlocker = new Node('InputBlocker');
+      inputBlocker.parent = runtime;
+    }
+    const inputBlockerTransform = inputBlocker.getComponent(UITransform) ?? inputBlocker.addComponent(UITransform);
+    inputBlockerTransform.setAnchorPoint(0.5, 0.5);
+    inputBlockerTransform.setContentSize(runtimeWidth, runtimeHeight);
+    inputBlocker.setPosition(0, 0, 0);
+    inputBlocker.getComponent(BlockInputEvents) ?? inputBlocker.addComponent(BlockInputEvents);
+    const inputBlockerGraphics = inputBlocker.getComponent(Graphics) ?? inputBlocker.addComponent(Graphics);
+    inputBlockerGraphics.clear();
+    inputBlockerGraphics.fillColor = new Color(0, 0, 0, EvidencePreviewController.DAY0_ENDING_RESULT_MASK_ALPHA);
+    inputBlockerGraphics.rect(-runtimeWidth * 0.5, -runtimeHeight * 0.5, runtimeWidth, runtimeHeight);
+    inputBlockerGraphics.fill();
+    inputBlocker.setSiblingIndex(0);
+
+    let background = runtime.getChildByName('Background');
+    if (!background || !background.isValid) {
+      background = new Node('Background');
+      background.parent = runtime;
+    }
+    const backgroundTransform = background.getComponent(UITransform) ?? background.addComponent(UITransform);
+    backgroundTransform.setAnchorPoint(0.5, 0.5);
+    backgroundTransform.setContentSize(
+      EvidencePreviewController.DAY0_ENDING_RESULT_PANEL_MAX_WIDTH,
+      EvidencePreviewController.DAY0_ENDING_RESULT_PANEL_MAX_HEIGHT,
+    );
+    background.setPosition(0, 0, 0);
+    const backgroundSprite = background.getComponent(Sprite) ?? background.addComponent(Sprite);
+    backgroundSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+    background.setSiblingIndex(1);
+
+    const legacyTitle = runtime.getChildByName('Title');
+    if (legacyTitle?.isValid) {
+      legacyTitle.parent = background;
+    }
+    const legacyBody = runtime.getChildByName('Body');
+    if (legacyBody?.isValid) {
+      legacyBody.parent = background;
+    }
+    const legacyButtonHit = runtime.getChildByName('ReturnHomeButton');
+    if (legacyButtonHit?.isValid) {
+      legacyButtonHit.parent = background;
+    }
+    const staleSubtitleOnRuntime = runtime.getChildByName('Subtitle');
+    if (staleSubtitleOnRuntime?.isValid) {
+      staleSubtitleOnRuntime.destroy();
+    }
+
+    const staleSubtitleOnBackground = background.getChildByName('Subtitle');
+    if (staleSubtitleOnBackground?.isValid) {
+      staleSubtitleOnBackground.destroy();
+    }
+
+    const titleNode = this.ensureDay0EndingResultLabelNode(background, 'Title', 500, 76, 44, 52, true);
+    titleNode.setPosition(0, 168, 0);
+    titleNode.setSiblingIndex(0);
+    const bodyNode = this.ensureDay0EndingResultLabelNode(background, 'Body', 470, 208, 26, 36, false);
+    bodyNode.setPosition(0, -8, 0);
+    bodyNode.setSiblingIndex(1);
+
+    let buttonHit = background.getChildByName('ReturnHomeButton');
+    if (!buttonHit || !buttonHit.isValid) {
+      buttonHit = new Node('ReturnHomeButton');
+      buttonHit.parent = background;
+    }
+    const buttonHitTransform = buttonHit.getComponent(UITransform) ?? buttonHit.addComponent(UITransform);
+    buttonHitTransform.setAnchorPoint(0.5, 0.5);
+    buttonHitTransform.setContentSize(
+      EvidencePreviewController.DAY0_ENDING_RESULT_BUTTON_HIT_WIDTH,
+      EvidencePreviewController.DAY0_ENDING_RESULT_BUTTON_HIT_HEIGHT,
+    );
+    buttonHit.setPosition(0, -182, 0);
+    const button = buttonHit.getComponent(Button) ?? buttonHit.addComponent(Button);
+    button.transition = Button.Transition.NONE;
+    button.interactable = false;
+    buttonHit.setSiblingIndex(2);
+
+    let buttonVisual = buttonHit.getChildByName('Visual');
+    if (!buttonVisual || !buttonVisual.isValid) {
+      buttonVisual = new Node('Visual');
+      buttonVisual.parent = buttonHit;
+    }
+    const buttonVisualTransform = buttonVisual.getComponent(UITransform) ?? buttonVisual.addComponent(UITransform);
+    buttonVisualTransform.setAnchorPoint(0.5, 0.5);
+    buttonVisualTransform.setContentSize(194, 84);
+    buttonVisual.setPosition(0, 0, 0);
+    const buttonSprite = buttonVisual.getComponent(Sprite) ?? buttonVisual.addComponent(Sprite);
+    buttonSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+
+    this.day0EndingResultRuntime = runtime;
+    this.day0EndingResultInputBlocker = inputBlocker;
+    this.day0EndingResultBackground = background;
+    this.day0EndingResultTitleNode = titleNode;
+    this.day0EndingResultBodyNode = bodyNode;
+    this.day0EndingResultReturnHomeHit = buttonHit;
+    this.day0EndingResultReturnHomeVisual = buttonVisual;
+    this.day0EndingResultReturnHomeButton = button;
+    this.setDay0EndingResultVisible(false);
+  }
+
+  private ensureDay0EndingResultLabelNode(
+    parent: Node,
+    nodeName: string,
+    width: number,
+    height: number,
+    fontSize: number,
+    lineHeight: number,
+    bold: boolean,
+  ): Node {
+    let node = parent.getChildByName(nodeName);
+    if (!node || !node.isValid) {
+      node = new Node(nodeName);
+      node.parent = parent;
+    }
+    const transform = node.getComponent(UITransform) ?? node.addComponent(UITransform);
+    transform.setAnchorPoint(0.5, 0.5);
+    transform.setContentSize(width, height);
+    const label = node.getComponent(Label) ?? node.addComponent(Label);
+    label.string = '';
+    label.fontSize = fontSize;
+    label.lineHeight = lineHeight;
+    label.horizontalAlign = Label.HorizontalAlign.CENTER;
+    label.verticalAlign = Label.VerticalAlign.CENTER;
+    label.overflow = Overflow.CLAMP;
+    label.enableWrapText = true;
+    label.isBold = bold;
+    label.color = new Color(44, 35, 28, 255);
+    return node;
+  }
+
+  private setDay0EndingResultVisible(visible: boolean): void {
+    this.day0EndingResultVisible = visible;
+    if (this.day0EndingResultRuntime?.isValid) {
+      this.day0EndingResultRuntime.active = visible;
+      const runtimeParent = this.day0EndingResultRuntime.parent;
+      if (runtimeParent?.isValid) {
+        this.day0EndingResultRuntime.setSiblingIndex(runtimeParent.children.length - 1);
+      }
+    }
+    if (this.day0EndingResultInputBlocker?.isValid) {
+      this.day0EndingResultInputBlocker.active = visible;
+    }
+    if (this.day0EndingResultReturnHomeHit?.isValid) {
+      this.day0EndingResultReturnHomeHit.active = visible;
+    }
+    if (this.day0EndingResultReturnHomeButton?.node?.isValid) {
+      this.day0EndingResultReturnHomeButton.interactable = visible && !this.day0EndingResultReturnLocked;
+    }
+  }
+
+  private async showDay0EndingResult(kind: Day0EndingResultKind): Promise<void> {
+    if (this.isDestroying || !this.node?.isValid) {
+      return;
+    }
+    this.ensureDay0EndingResultRuntime();
+    this.day0EndingResultKind = kind;
+    this.day0EndingResultReturnLocked = false;
+    const content = EvidencePreviewController.DAY0_ENDING_RESULT_CONTENT[kind];
+    const titleLabel = this.day0EndingResultTitleNode?.getComponent(Label) ?? null;
+    const bodyLabel = this.day0EndingResultBodyNode?.getComponent(Label) ?? null;
+    if (titleLabel) {
+      titleLabel.string = content.title;
+    }
+    if (bodyLabel) {
+      bodyLabel.string = content.body;
+    }
+
+    if (!this.day0EndingResultPaperFrame) {
+      this.day0EndingResultPaperFrame = await this.loadSpriteFrameFromResources(
+        EvidencePreviewController.DAY0_ENDING_RESULT_PAPER_PATH,
+      );
+    }
+    if (!this.day0EndingResultReturnHomeFrame) {
+      this.day0EndingResultReturnHomeFrame = await this.loadSpriteFrameFromResources(
+        EvidencePreviewController.DAY0_ENDING_RESULT_RETURN_HOME_PATH,
+      );
+    }
+    if (this.isDestroying || !this.node?.isValid) {
+      return;
+    }
+    const paperSprite = this.day0EndingResultBackground?.getComponent(Sprite) ?? null;
+    if (paperSprite && this.day0EndingResultPaperFrame) {
+      paperSprite.spriteFrame = this.day0EndingResultPaperFrame;
+      this.applyContainSize(
+        this.day0EndingResultBackground,
+        this.day0EndingResultPaperFrame,
+        EvidencePreviewController.DAY0_ENDING_RESULT_PANEL_MAX_WIDTH,
+        EvidencePreviewController.DAY0_ENDING_RESULT_PANEL_MAX_HEIGHT,
+      );
+    }
+    const returnHomeSprite = this.day0EndingResultReturnHomeVisual?.getComponent(Sprite) ?? null;
+    if (returnHomeSprite && this.day0EndingResultReturnHomeFrame) {
+      returnHomeSprite.spriteFrame = this.day0EndingResultReturnHomeFrame;
+      this.applySpriteFrameByTargetHeight(
+        this.day0EndingResultReturnHomeVisual,
+        this.day0EndingResultReturnHomeFrame,
+        EvidencePreviewController.DAY0_ENDING_RESULT_BUTTON_TARGET_HEIGHT,
+        EvidencePreviewController.DAY0_ENDING_RESULT_BUTTON_MAX_WIDTH,
+      );
+    }
+    this.setNodeSize(
+      this.day0EndingResultReturnHomeHit,
+      EvidencePreviewController.DAY0_ENDING_RESULT_BUTTON_HIT_WIDTH,
+      EvidencePreviewController.DAY0_ENDING_RESULT_BUTTON_HIT_HEIGHT,
+    );
+    this.setDay0EndingResultVisible(true);
+  }
+
+  private readonly handleDay0EndingResultReturnHome = (): void => {
+    if (!this.day0EndingResultVisible || this.day0EndingResultReturnLocked || this.isDestroying) {
+      return;
+    }
+    this.day0EndingResultReturnLocked = true;
+    if (this.day0EndingResultReturnHomeButton?.node?.isValid) {
+      this.day0EndingResultReturnHomeButton.interactable = false;
+    }
+    this.setDay0EndingResultVisible(false);
+    this.returnHomeAfterDay0Ending();
+  };
+
+  private enterDay0EndingFinalChoice(): void {
+    if (!this.day0EndingDisplayTestActive || this.isDestroying) {
+      return;
+    }
+    this.unschedule(this.handleDay0EndingSelfDialogueHoldElapsed);
+    this.day0EndingSelfDialogueInProgress = false;
+    this.day0EndingSelfDialogueCompleted = true;
+    this.day0EndingSelfDialogueFinalChoiceQueued = false;
+    this.day0EndingArchiveRevealActive = false;
+    this.day0EndingFinalChoiceActive = true;
+    this.day0EndingFinalChoiceCompleted = false;
+    this.day0EndingFinalChoiceTransitionInProgress = false;
+    this.day0EndingFinalChoiceSelection = null;
+    this.day0EndingResultKind = null;
+    this.day0EndingResultReturnLocked = false;
+    this.setDay0EndingResultVisible(false);
+    this.unschedule(this.handleDay0EndingRemoveThreatAlertElapsed);
+    this.unschedule(this.handleDay0EndingRemoveThreatFinalizeElapsed);
+    this.unschedule(this.handleDay0EndingRemoveThreatReturnHomeElapsed);
+    AudioManager.getInstance()?.stopAlarmLoop();
+    this.unbindDay0EndingShutterOpenSettledListener();
+    this.unschedule(this.handleDay0EndingArchiveRevealDelayElapsed);
+    this.employeeFilesController?.exitDay0EndingArchiveRevealMode();
+    const drawersClosedRuntime = this.node.getChildByName('EmployeeDrawersClosedRuntime');
+    if (drawersClosedRuntime?.isValid) {
+      // Day0 ending UI should always show the drawer strip from the start.
+      drawersClosedRuntime.active = true;
+      this.setEmployeeFilesInteractionEnabled(drawersClosedRuntime, false);
+      this.employeeFilesController?.closeOpenDrawerForExternalInteraction();
+    }
+    this.lockAllEncounterInput('day0-ending-final-choice-active');
+    this.setTelephoneEntryEnabledForInteractionTrace(false, 'day0-ending-final-choice-active');
+    this.setShutterInteractionEnabledForInteractionTrace(false, 'day0-ending-final-choice-active');
+    this.applyDay0EndingFinalChoiceVisuals();
+    this.setDay0EndingFinalChoiceVisible(true);
+    this.logInteractionTrace('day0-ending-final-choice-entered', {
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+      selection: this.day0EndingFinalChoiceSelection ?? 'none',
+    });
+  }
+
+  private readonly handleDay0EndingFinalChoiceKeepSelected = (): void => {
+    if (
+      !this.day0EndingFinalChoiceActive ||
+      this.day0EndingFinalChoiceCompleted ||
+      this.day0EndingFinalChoiceTransitionInProgress
+    ) {
+      return;
+    }
+    this.day0EndingFinalChoiceCompleted = true;
+    this.day0EndingFinalChoiceTransitionInProgress = true;
+    this.day0EndingFinalChoiceActive = false;
+    this.day0EndingFinalChoiceSelection = 'keep-identity';
+    this.setDay0EndingFinalChoiceVisible(false);
+    this.lockAllEncounterInput('day0-ending-final-choice-keep-selected');
+    this.setManagedButtonsInteractable(false, 'day0-ending-final-choice-keep-selected');
+    this.setTelephoneEntryEnabledForInteractionTrace(false, 'day0-ending-final-choice-keep-selected');
+    this.setShutterInteractionEnabledForInteractionTrace(false, 'day0-ending-final-choice-keep-selected');
+    this.logInteractionTrace('day0-ending-final-choice-selected', {
+      choice: this.day0EndingFinalChoiceSelection,
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+    });
+    this.finalizeDay0EndingState('keep-identity');
+    void this.showDay0EndingResult('keep-identity');
+  };
+
+  private readonly handleDay0EndingFinalChoiceRemoveSelected = (): void => {
+    if (
+      !this.day0EndingFinalChoiceActive ||
+      this.day0EndingFinalChoiceCompleted ||
+      this.day0EndingFinalChoiceTransitionInProgress
+    ) {
+      return;
+    }
+    this.day0EndingFinalChoiceCompleted = true;
+    this.day0EndingFinalChoiceTransitionInProgress = true;
+    this.day0EndingFinalChoiceActive = false;
+    this.day0EndingFinalChoiceSelection = 'remove-threat';
+    this.setDay0EndingFinalChoiceVisible(false);
+    this.lockAllEncounterInput('day0-ending-final-choice-remove-selected');
+    this.setManagedButtonsInteractable(false, 'day0-ending-final-choice-remove-selected');
+    this.setTelephoneEntryEnabledForInteractionTrace(false, 'day0-ending-final-choice-remove-selected');
+    this.setShutterInteractionEnabledForInteractionTrace(false, 'day0-ending-final-choice-remove-selected');
+    this.logInteractionTrace('day0-ending-final-choice-selected', {
+      choice: this.day0EndingFinalChoiceSelection,
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+    });
+    this.beginDay0EndingRemoveThreatAlertStep();
+  };
+
+  private beginDay0EndingRemoveThreatAlertStep(): void {
+    if (
+      !this.day0EndingDisplayTestActive ||
+      !this.day0EndingFinalChoiceTransitionInProgress ||
+      this.day0EndingFinalChoiceSelection !== 'remove-threat'
+    ) {
+      return;
+    }
+    AudioManager.getInstance()?.startAlarmLoop();
+    // Keep alert presentation minimal to avoid non-cinematic full-screen notice overlays.
+    console.info('[Day0Ending] remove-threat alert', {
+      text: EvidencePreviewController.DAY0_ENDING_REMOVE_THREAT_ALERT_TEXT,
+    });
+    this.unschedule(this.handleDay0EndingRemoveThreatAlertElapsed);
+    this.scheduleOnce(
+      this.handleDay0EndingRemoveThreatAlertElapsed,
+      EvidencePreviewController.DAY0_ENDING_REMOVE_THREAT_ALERT_SECONDS,
+    );
+  }
+
+  private beginDay0EndingRemoveThreatShutterCloseStep(): void {
+    if (
+      !this.day0EndingDisplayTestActive ||
+      !this.day0EndingFinalChoiceTransitionInProgress ||
+      this.day0EndingFinalChoiceSelection !== 'remove-threat'
+    ) {
+      return;
+    }
+    if (!this.shutterController) {
+      this.beginDay0EndingRemoveThreatFinalizeStep();
+      return;
+    }
+    if (!this.startDay0EndingRemoveThreatCinematicClose()) {
+      // Fallback to existing close path if shutter visual runtime is unavailable.
+      this.setShutterInteractionEnabledForInteractionTrace(true, 'day0-ending-remove-threat-programmatic-close');
+      this.shutterController.node.emit(Node.EventType.TOUCH_END);
+      this.setShutterInteractionEnabledForInteractionTrace(false, 'day0-ending-remove-threat-lock-after-close');
+      this.unschedule(this.handleDay0EndingRemoveThreatFinalizeElapsed);
+      this.scheduleOnce(
+        this.handleDay0EndingRemoveThreatFinalizeElapsed,
+        EvidencePreviewController.DAY0_ENDING_REMOVE_THREAT_SHUTTER_CLOSE_SECONDS,
+      );
+      return;
+    }
+  }
+
+  private beginDay0EndingRemoveThreatFinalizeStep(): void {
+    if (
+      !this.day0EndingDisplayTestActive ||
+      !this.day0EndingFinalChoiceTransitionInProgress ||
+      this.day0EndingFinalChoiceSelection !== 'remove-threat'
+    ) {
+      return;
+    }
+    this.unschedule(this.handleDay0EndingRemoveThreatReturnHomeElapsed);
+    this.scheduleOnce(
+      this.handleDay0EndingRemoveThreatReturnHomeElapsed,
+      EvidencePreviewController.DAY0_ENDING_REMOVE_THREAT_POST_CLOSE_HOLD_SECONDS,
+    );
+  }
+
+  private finalizeDay0EndingState(branch: Day0EndingResultKind): void {
+    if (!this.day0EndingFinalChoiceTransitionInProgress || this.isDestroying) {
+      return;
+    }
+    this.unschedule(this.handleDay0EndingRemoveThreatAlertElapsed);
+    this.unschedule(this.handleDay0EndingRemoveThreatFinalizeElapsed);
+    this.unschedule(this.handleDay0EndingRemoveThreatReturnHomeElapsed);
+    this.day0EndingFinalChoiceActive = false;
+    this.day0EndingFinalChoiceTransitionInProgress = false;
+    this.setDay0EndingFinalChoiceVisible(false);
+    AudioManager.getInstance()?.stopAlarmLoop();
+    this.cleanupDay0EndingPhonePhase1State();
+    this.day0EndingDisplayTestActive = false;
+    this.day0EndingResultKind = branch;
+    this.logInteractionTrace('day0-ending-final-choice-completed', {
+      branch,
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+    });
+  }
+
+  private returnHomeAfterDay0Ending(): void {
+    director.loadScene(EvidencePreviewController.RETURN_HOME_SCENE_NAME, (error) => {
+      if (!error) {
+        return;
+      }
+      console.error('[Day0Ending] failed to return HomeScene after final choice.', error);
+    });
+  }
+
+  private startDay0EndingRemoveThreatCinematicClose(): boolean {
+    const shutterVisual = this.resolveDay0EndingShutterVisualNode();
+    const shutterController = this.shutterController;
+    if (!shutterVisual?.isValid || !shutterController) {
+      return false;
+    }
+    const openPosition = shutterVisual.position.clone();
+    if (!shutterController.prepareClosedForIntro()) {
+      return false;
+    }
+    const closedPosition = shutterVisual.position.clone();
+    shutterVisual.setPosition(openPosition);
+    Tween.stopAllByTarget(shutterVisual);
+    AudioManager.getInstance()?.playCachedShutterMove();
+    tween(shutterVisual)
+      .to(
+        EvidencePreviewController.DAY0_ENDING_REMOVE_THREAT_SHUTTER_CLOSE_SECONDS,
+        { position: closedPosition },
+        { easing: 'cubicInOut' },
+      )
+      .call(() => {
+        shutterController.prepareClosedForIntro();
+        this.beginDay0EndingRemoveThreatFinalizeStep();
+      })
+      .start();
+    return true;
+  }
+
+  private resolveDay0EndingShutterVisualNode(): Node | null {
+    const shutterHitNode = this.shutterController?.node ?? null;
+    const consoleControls = shutterHitNode?.parent ?? null;
+    const canvas = consoleControls?.parent ?? null;
+    const windowRuntime = canvas?.getChildByName('WindowRuntime') ?? null;
+    const windowViewport = windowRuntime?.getChildByName('WindowViewport') ?? null;
+    const shutterVisual = windowViewport?.getChildByName('WindowShutterVisual') ?? null;
+    return shutterVisual?.isValid ? shutterVisual : null;
   }
 
   private selectIdCardFail(): void {
@@ -3816,11 +5414,12 @@ export class EvidencePreviewController extends Component {
 
     this.checklistQuestionPanelOpen = false;
     this.screeningChecklistDetailVisual.active = false;
-    this.evidencePreviewRuntime.active = false;
+    this.hideEvidencePreviewRuntimeImmediate('checklist-reply-open');
     this.checklistReplyPanelRuntime.active = true;
     this.checklistReplyPanelOpen = true;
     this.previewOpen = true;
-    this.setManagedButtonsInteractable(false);
+    this.setManagedButtonsInteractable(false, 'checklist-reply-open');
+    AudioManager.getInstance()?.playVoice(VoiceId.AlienSpeech01);
     this.startChecklistReplyTyping(this.getNormalChecklistReply(question));
   }
 
@@ -3862,12 +5461,12 @@ export class EvidencePreviewController extends Component {
     }
 
     if (this.evidencePreviewRuntime) {
-      this.evidencePreviewRuntime.active = false;
+      this.hideEvidencePreviewRuntimeImmediate('checklist-reply-close');
     }
     if (this.screeningChecklistDetailVisual) {
       this.screeningChecklistDetailVisual.active = false;
     }
-    this.setManagedButtonsInteractable(true);
+    this.setManagedButtonsInteractable(true, 'checklist-reply-close');
     this.previewOpen = false;
   }
 
@@ -3881,7 +5480,10 @@ export class EvidencePreviewController extends Component {
       return;
     }
     this.drawScrim(170);
-    this.evidencePreviewRuntime.active = true;
+    this.recoverEvidencePreviewPanelStateIfDesynced('restore-checklist-state');
+    showInteractivePanel(this.evidencePreviewRuntime, {
+      setInteractable: (interactable) => this.setEvidencePreviewPanelInteractable(interactable),
+    });
     this.employeeCardDetailVisual.active = false;
     this.applicationFormDetailVisual.active = false;
     this.screeningChecklistDetailVisual.active = true;
@@ -3889,7 +5491,7 @@ export class EvidencePreviewController extends Component {
       this.checklistQuestionPanelRuntime.active = false;
     }
     this.checklistQuestionPanelOpen = false;
-    this.setManagedButtonsInteractable(false);
+    this.setManagedButtonsInteractable(false, 'checklist-reply-restore');
     this.previewOpen = true;
   }
 
@@ -3954,8 +5556,16 @@ export class EvidencePreviewController extends Component {
   }
 
   private getRequiredChecklistItemKeys(): readonly ChecklistItemKey[] {
+    return this.getRequiredChecklistDataItemKeys();
+  }
+
+  private getRequiredChecklistDataItemKeys(): readonly ChecklistItemKey[] {
     const required = this.activeDayConfig?.requiredChecklistCategories ?? [];
     return required.map((category) => EvidencePreviewController.CHECKLIST_CATEGORY_TO_KEY[category]);
+  }
+
+  private isChecklistDataItemRequired(itemKey: ChecklistItemKey): boolean {
+    return this.getRequiredChecklistDataItemKeys().includes(itemKey);
   }
 
   private isChecklistItemRequired(itemKey: ChecklistItemKey): boolean {
@@ -3973,6 +5583,21 @@ export class EvidencePreviewController extends Component {
   }
 
   private getRequiredEvidenceTruthPass(itemKey: ChecklistItemKey): boolean {
+    const activeSubject = this.currentInspectionSubject;
+    if (activeSubject?.subjectKind === 'visitor') {
+      if (activeSubject.dayIndex !== 4) {
+        return true;
+      }
+      const hasDepartmentMismatch = activeSubject.mismatchKinds.includes('department');
+      const hasPurposeMismatch = activeSubject.mismatchKinds.includes('purpose');
+      if (itemKey === 'appearance') {
+        return !activeSubject.mismatchKinds.includes('appearance');
+      }
+      if (itemKey === 'application') {
+        return !hasDepartmentMismatch && !hasPurposeMismatch;
+      }
+      return true;
+    }
     const truth = this.currentRound?.truth;
     if (!truth) {
       return false;
@@ -3984,6 +5609,21 @@ export class EvidencePreviewController extends Component {
       return truth.applicationPass;
     }
     return truth.appearancePass;
+  }
+
+  private hasValidDay4VisitorDenyEvidence(): boolean {
+    const activeSubject = this.currentInspectionSubject;
+    if (activeSubject?.subjectKind !== 'visitor' || activeSubject.dayIndex !== 4) {
+      return false;
+    }
+    if (activeSubject.phoneVerificationResult?.visitorArrived === true) {
+      return true;
+    }
+    return (
+      this.isChecklistComplete() &&
+      this.doesRequiredChecklistMatchTruth() &&
+      this.hasAnyRequiredEvidenceFailure()
+    );
   }
 
   private hasAnyRequiredEvidenceFailure(): boolean {
@@ -4017,7 +5657,11 @@ export class EvidencePreviewController extends Component {
     const inspectionSubject = this.currentInspectionSubject;
     if (inspectionSubject?.subjectKind === 'visitor') {
       const visitorDecision = action === 'allow' ? 'allow' : 'deny';
-      const visitorOutcome = resolveVisitorDecision(inspectionSubject, visitorDecision);
+      const visitorOutcome = resolveVisitorDecision(inspectionSubject, visitorDecision, {
+        idCardChoice: this.idCardChoice,
+        applicationChoice: this.applicationChoice,
+        appearanceChoice: this.appearanceChoice,
+      });
       switch (visitorOutcome.kind) {
         case 'valid-visitor-allowed':
           return 'visitor-valid-allowed';
@@ -4135,12 +5779,13 @@ export class EvidencePreviewController extends Component {
     }
     this.checklistQuestionPanelOpen = false;
     this.screeningChecklistDetailVisual.active = false;
-    this.evidencePreviewRuntime.active = false;
+    this.hideEvidencePreviewRuntimeImmediate('checklist-reply-context-open');
     this.checklistReplyPanelRuntime.active = true;
     this.checklistReplyPanelOpen = true;
     this.previewOpen = true;
     this.checklistReplyContext = context;
     this.configureChecklistReplyOverlay(blockInput, allowClose);
+    AudioManager.getInstance()?.playVoice(VoiceId.AlienSpeech01);
 
     if (useTyping) {
       this.startChecklistReplyTyping(fullText);
@@ -4180,16 +5825,24 @@ export class EvidencePreviewController extends Component {
   }
 
   private readonly handleAllowDecisionClick = (): void => {
+    this.traceRepresentativeClickReceived('allow');
     this.requestAllowDecision('console-allow');
   };
 
   private requestAllowDecision(source: 'console-allow' | 'checklist-pass'): void {
     console.info(`[InspectionDecision] allow requested: ${source}`);
-    if (!this.canStartAllowDecisionResolution(source)) {
+    const blockedReason = this.resolveAllowDecisionBlockReason(source);
+    if (blockedReason) {
+      if (source === 'console-allow') {
+        this.traceRepresentativeClickBlocked('allow', blockedReason);
+      }
       return;
     }
     console.info(`[InspectionDecision] resolution gate accepted: ${source}`);
     if (!this.captureReviveCheckpointBeforeDecision()) {
+      if (source === 'console-allow') {
+        this.traceRepresentativeClickBlocked('allow', 'checkpoint-capture-failed');
+      }
       console.error('[Revive] Failed to capture decision checkpoint before allow.');
       return;
     }
@@ -4197,7 +5850,7 @@ export class EvidencePreviewController extends Component {
     if (source === 'checklist-pass') {
       this.hideChecklistPreviewForResolution();
     }
-    this.lockAllEncounterInput();
+    this.lockAllEncounterInput('decision-resolution-lock-allow');
     const outcome = this.resolveInspectionDecisionOutcome('allow');
     void this.handleInspectionDecisionOutcome(outcome, token).catch((error) => {
       console.error('[InspectionDecision] allow outcome handler failed.', error);
@@ -4231,6 +5884,37 @@ export class EvidencePreviewController extends Component {
       }
       return;
     }
+    if (this.isActiveVisitorInspectionSubject() && !this.hasValidDay4VisitorDenyEvidence()) {
+      console.warn('[InspectionDecision] day4 visitor deny evidence gate blocked', {
+        roundId:
+          this.currentInspectionSubject?.subjectKind === 'visitor'
+            ? this.currentInspectionSubject.roundId
+            : null,
+        visitorKey:
+          this.currentInspectionSubject?.subjectKind === 'visitor'
+            ? this.currentInspectionSubject.visitorKey
+            : null,
+        source,
+        idCardChoice: this.idCardChoice,
+        applicationChoice: this.applicationChoice,
+        appearanceChoice: this.appearanceChoice,
+        visitorArrived:
+          this.currentInspectionSubject?.subjectKind === 'visitor'
+            ? (this.currentInspectionSubject.phoneVerificationResult?.visitorArrived ?? null)
+            : null,
+      });
+      if (!this.incompleteRejectNoticeInFlight) {
+        this.incompleteRejectNoticeInFlight = true;
+        void this.showSystemNotice('FIND EVIDENCE BEFORE DENYING.')
+          .catch((error) => {
+            console.error('[InspectionDecision] day4 visitor deny evidence notice failed.', error);
+          })
+          .finally(() => {
+            this.incompleteRejectNoticeInFlight = false;
+          });
+      }
+      return;
+    }
     if (!this.captureReviveCheckpointBeforeDecision()) {
       console.error('[Revive] Failed to capture decision checkpoint before deny.');
       return;
@@ -4239,7 +5923,7 @@ export class EvidencePreviewController extends Component {
     if (source === 'checklist-reject') {
       this.hideChecklistPreviewForResolution();
     }
-    this.lockAllEncounterInput();
+    this.lockAllEncounterInput('decision-resolution-lock-deny');
     const outcome = this.resolveInspectionDecisionOutcome('reject');
     void this.handleInspectionDecisionOutcome(outcome, token).catch((error) => {
       console.error('[InspectionDecision] reject outcome handler failed.', error);
@@ -4248,24 +5932,28 @@ export class EvidencePreviewController extends Component {
   }
 
   private canStartAllowDecisionResolution(source: 'console-allow' | 'checklist-pass'): boolean {
+    return this.resolveAllowDecisionBlockReason(source) === null;
+  }
+
+  private resolveAllowDecisionBlockReason(source: 'console-allow' | 'checklist-pass'): string | null {
     if (!this.node?.isValid || this.isDestroying) {
-      return false;
+      return 'controller-disabled';
     }
     if (this.campaignDayTransitionInProgress || this.campaignImplementedContentComplete) {
-      return false;
+      return 'day-transition';
     }
     if (this.campaignDayCompletionPending || this.campaignDayContinueRequested) {
-      return false;
+      return 'day-transition';
     }
     if (this.inspectionDecisionResolutionInProgress || this.administrativeGameOverActive) {
-      return false;
+      return 'inspection-resolution-in-progress';
     }
     if (!this.getActiveInspectionSubjectDefinition()) {
-      return false;
+      return 'missing-subject-definition';
     }
     if (source === 'console-allow') {
       if (!this.allowHitButton?.node?.isValid || !this.allowHitButton.interactable) {
-        return false;
+        return 'button-not-interactable';
       }
       if (
         this.previewOpen ||
@@ -4274,18 +5962,18 @@ export class EvidencePreviewController extends Component {
         this.applicationFormDetailVisual?.active ||
         this.screeningChecklistDetailVisual?.active
       ) {
-        return false;
+        return 'preview-open';
       }
     }
     if (source === 'checklist-pass') {
       if (this.checklistActionMode !== 'pass') {
-        return false;
+        return 'decision-gate-false';
       }
       if (!this.checklistActionButton?.node?.isValid || !this.checklistActionButton.interactable) {
-        return false;
+        return 'button-not-interactable';
       }
       if (!this.checklistActionHit?.isValid || !this.checklistActionHit.active) {
-        return false;
+        return 'decision-gate-false';
       }
       if (
         !this.evidencePreviewRuntime?.isValid ||
@@ -4294,20 +5982,20 @@ export class EvidencePreviewController extends Component {
         !this.evidencePreviewRuntime.active ||
         !this.screeningChecklistDetailVisual.active
       ) {
-        return false;
+        return 'missing-runtime-node';
       }
       if (this.employeeCardDetailVisual?.active || this.applicationFormDetailVisual?.active) {
-        return false;
+        return 'preview-open';
       }
     }
     if (this.checklistQuestionPanelOpen || this.checklistReplyPanelOpen) {
-      return false;
+      return 'modal-active';
     }
     if (this.checklistReplyContext !== 'normal') {
-      return false;
+      return 'modal-active';
     }
     if (this.visitorGreetingRuntime?.isValid && this.visitorGreetingRuntime.active) {
-      return false;
+      return 'modal-active';
     }
     if (
       this.threatSequenceActive ||
@@ -4317,21 +6005,21 @@ export class EvidencePreviewController extends Component {
       this.cleanupProgramActivated ||
       this.phoneEmergencyResolved
     ) {
-      return false;
+      return 'monster-threat';
     }
     if (this.carterAttackTriggered || this.carterEncounterResolved) {
-      return false;
+      return 'monster-threat';
     }
     if (this.retryLoadInProgress) {
-      return false;
+      return 'modal-active';
     }
     if (this.carterMonsterAttackRuntime?.isValid && this.carterMonsterAttackRuntime.active) {
-      return false;
+      return 'modal-active';
     }
     if (this.carterGameOverPanelRuntime?.isValid && this.carterGameOverPanelRuntime.active) {
-      return false;
+      return 'modal-active';
     }
-    return true;
+    return null;
   }
 
   private canStartRejectDecisionResolution(source: CarterRejectFlowSource): boolean {
@@ -4419,7 +6107,7 @@ export class EvidencePreviewController extends Component {
   }
 
   private beginDecisionResolution(): number {
-    this.inspectionDecisionResolutionInProgress = true;
+    this.setInspectionDecisionResolutionInProgress(true, 'decision-resolution-begin');
     this.decisionResolutionToken += 1;
     return this.decisionResolutionToken;
   }
@@ -4432,10 +6120,10 @@ export class EvidencePreviewController extends Component {
     if (!this.isDecisionResolutionTokenActive(token)) {
       return;
     }
-    this.inspectionDecisionResolutionInProgress = false;
-    this.setManagedButtonsInteractable(true);
-    this.telephoneController?.setTelephoneEntryEnabled(true);
-    this.shutterController?.setInteractionEnabled(true);
+    this.setInspectionDecisionResolutionInProgress(false, 'decision-resolution-abort');
+    this.setManagedButtonsInteractable(true, 'decision-resolution-abort-unlock');
+    this.setTelephoneEntryEnabledForInteractionTrace(true, 'decision-resolution-abort-unlock');
+    this.setShutterInteractionEnabledForInteractionTrace(true, 'decision-resolution-abort-unlock');
   }
 
   private async showDecisionDialogue(
@@ -4519,6 +6207,7 @@ export class EvidencePreviewController extends Component {
       autoCloseSeconds: 2.8,
       allowTapDismiss: true,
       minimumVisibleSeconds: 0.35,
+      messageKind: 'complaint',
     });
     if (!this.isDecisionResolutionTokenActive(token)) return;
     this.formalComplaintCount += 1;
@@ -4577,14 +6266,14 @@ export class EvidencePreviewController extends Component {
     this.invalidateFailureReviewVisuals();
     this.hideFailureReviewRuntime();
     this.registerActiveGameOver(reason);
-    this.lockAllEncounterInput();
+    this.lockAllEncounterInput('administrative-gameover-lock');
     this.hideCarterThreatReplyCompletely();
     this.stopChecklistReplyTyping(true);
     this.closePreview();
     this.telephoneController?.closeEmergencyPhone();
-    this.telephoneController?.setTelephoneEntryEnabled(false);
+    this.setTelephoneEntryEnabledForInteractionTrace(false, 'administrative-gameover-lock');
     this.telephoneController?.setEmergencyInputEnabled(false);
-    this.shutterController?.setInteractionEnabled(false);
+    this.setShutterInteractionEnabledForInteractionTrace(false, 'administrative-gameover-lock');
     this.shutterController?.stopShutterImpactLoop();
     this.shutterController?.restoreNormalVisual();
 
@@ -4620,12 +6309,13 @@ export class EvidencePreviewController extends Component {
       messageLabel.string = message;
     }
 
-    if (reason === 'multiple-formal-complaints') {
-      this.applyComplaintTerminationLayout(titleLabel, messageLabel);
+    if (reason === 'multiple-formal-complaints' || reason === 'repeated-procedural-violations') {
+      this.applyComplaintTerminationLayout(reason, titleLabel, messageLabel);
       return;
     }
 
     if (reason === 'internal-contamination') {
+      this.playInternalContaminationGameOverAudioCueIfNeeded();
       this.applyInternalContaminationGameOverLayout(titleLabel, messageLabel);
       if (this.carterMonsterPortraitSource?.isValid) {
         this.carterMonsterPortraitSource.active = false;
@@ -4758,9 +6448,7 @@ export class EvidencePreviewController extends Component {
     if (this.checklistReplyPanelRuntime?.isValid) {
       this.checklistReplyPanelRuntime.active = false;
     }
-    if (this.evidencePreviewRuntime?.isValid) {
-      this.evidencePreviewRuntime.active = false;
-    }
+    this.hideEvidencePreviewRuntimeImmediate('non-combat-advance');
     if (this.employeeCardDetailVisual?.isValid) {
       this.employeeCardDetailVisual.active = false;
     }
@@ -4786,7 +6474,7 @@ export class EvidencePreviewController extends Component {
       this.completeActiveVisitorNonCombatDeparture(visitorRoundId);
     }
     this.resetInspectionRoundForNextSubject();
-    this.inspectionDecisionResolutionInProgress = true;
+    this.setInspectionDecisionResolutionInProgress(true, 'non-combat-advance-in-progress');
 
     // Shared exit entry for ALLOW / DENY / complaint / protocol-violation advances:
     // footsteps are bound inside playCharacterExit at move-animation start.
@@ -4808,14 +6496,13 @@ export class EvidencePreviewController extends Component {
     }
     if (!this.loadInspectionSubject(this.activeInspectionSubjectId)) {
       console.error('[InspectionDecision] transition failed: load next inspection subject failed');
-      this.inspectionDecisionResolutionInProgress = false;
+      this.setInspectionDecisionResolutionInProgress(false, 'non-combat-advance-load-failed');
       return;
     }
-    this.setManagedButtonsInteractable(false);
+    this.setManagedButtonsInteractable(false, 'subject-load-lock-after-non-combat');
     const introResult = await this.playIntroForActiveSubject();
     if (!introResult.ok) {
       console.error('[InspectionDecision] transition failed: next intro start failed');
-      this.inspectionDecisionResolutionInProgress = false;
     }
   }
 
@@ -5021,7 +6708,7 @@ export class EvidencePreviewController extends Component {
           minimumVisibleSeconds: 0,
         });
         if (!this.isDecisionResolutionTokenActive(token)) return;
-        if (!this.startCarterThreatSequence(false)) {
+        if (!this.startCarterThreatSequence(false, true)) {
           console.error('[VisitorMonsterReveal] threat chain did not start.');
         }
         return;
@@ -5053,7 +6740,7 @@ export class EvidencePreviewController extends Component {
       !this.applicationFormDetailVisual?.active &&
       !this.screeningChecklistDetailVisual?.active
     ) {
-      this.evidencePreviewRuntime.active = false;
+      this.hideEvidencePreviewRuntimeImmediate('checklist-preview-resolution-hide');
     }
     this.previewOpen = false;
   }
@@ -5067,6 +6754,7 @@ export class EvidencePreviewController extends Component {
     this.threatSequenceActive = false;
     this.emergencyWindowOpen = false;
     this.emergencyShutterSucceeded = false;
+    this.emergencyShutterCloseRequested = false;
     this.phoneResponseWindowOpen = false;
     this.phoneDialWindowOpen = false;
     this.cleanupProgramActivated = false;
@@ -5075,6 +6763,11 @@ export class EvidencePreviewController extends Component {
     this.emergencyDeadlineMs = 0;
     this.phoneResponseDeadlineMs = 0;
     this.phoneDialDeadlineMs = 0;
+    this.monsterThreatProtectionPhase = 'idle';
+    this.activeMonsterThreatTiming = null;
+    this.closedShutterProtectionGranted = false;
+    this.monsterThreatGeneration += 1;
+    this.emergencyTimeoutGeneration = this.monsterThreatGeneration;
     this.unschedule(this.handleEmergencyTimeout);
     this.unschedule(this.handleDelayedDamagedShutterSwitch);
     this.unschedule(this.handlePhonePickupTimeout);
@@ -5091,10 +6784,10 @@ export class EvidencePreviewController extends Component {
     this.shutterController?.stopShutterImpactLoop();
     this.shutterController?.restoreNormalVisual();
     this.shutterController?.prepareClosedForIntro();
-    this.shutterController?.setInteractionEnabled(false);
+    this.setShutterInteractionEnabledForInteractionTrace(false, 'correct-allow-transition');
     this.telephoneController?.closeEmergencyPhone();
     this.telephoneController?.setEmergencyInputEnabled(false);
-    this.telephoneController?.setTelephoneEntryEnabled(false);
+    this.setTelephoneEntryEnabledForInteractionTrace(false, 'correct-allow-transition');
 
     this.hideCarterThreatReplyCompletely();
     this.stopChecklistReplyTyping(true);
@@ -5105,9 +6798,7 @@ export class EvidencePreviewController extends Component {
     if (this.checklistReplyPanelRuntime?.isValid) {
       this.checklistReplyPanelRuntime.active = false;
     }
-    if (this.evidencePreviewRuntime?.isValid) {
-      this.evidencePreviewRuntime.active = false;
-    }
+    this.hideEvidencePreviewRuntimeImmediate('correct-allow-transition');
     if (this.employeeCardDetailVisual?.isValid) {
       this.employeeCardDetailVisual.active = false;
     }
@@ -5133,7 +6824,7 @@ export class EvidencePreviewController extends Component {
     this.refreshChecklistActionState();
 
     this.resetInspectionRoundForNextSubject();
-    this.inspectionDecisionResolutionInProgress = true;
+    this.setInspectionDecisionResolutionInProgress(true, 'correct-allow-advance-in-progress');
 
     const advanced = this.advanceToNextInspectionSubject();
     if (!advanced) {
@@ -5144,21 +6835,19 @@ export class EvidencePreviewController extends Component {
     }
     if (!this.loadInspectionSubject(this.activeInspectionSubjectId)) {
       console.error('[InspectionDecision] allow transition failed: load next inspection subject failed');
-      this.inspectionDecisionResolutionInProgress = false;
+      this.setInspectionDecisionResolutionInProgress(false, 'correct-allow-load-failed');
       return;
     }
-    this.setManagedButtonsInteractable(false);
+    this.setManagedButtonsInteractable(false, 'subject-load-lock-after-correct-allow');
     const introResult = await this.playIntroForActiveSubject();
     if (!introResult.ok) {
       console.error('[InspectionDecision] allow transition failed: next intro start failed');
-      this.inspectionDecisionResolutionInProgress = false;
     }
   }
 
   private triggerIncorrectAllowGameOver(): void {
     console.warn('[InspectionDecision] incorrect allow');
-    this.lockAllEncounterInput();
-    this.commitActiveMonsterFullbodyPresentation('incorrect-allow');
+    this.lockAllEncounterInput('incorrect-allow-gameover-lock');
     console.warn('[InspectionDecision] game over: incorrect-allow');
     this.triggerCarterBreakthroughFailure('incorrect-allow');
   }
@@ -5189,13 +6878,13 @@ export class EvidencePreviewController extends Component {
       this.checklistActionHit.active = false;
     }
     if (this.evidencePreviewRuntime) {
-      this.evidencePreviewRuntime.active = false;
+      this.hideEvidencePreviewRuntimeImmediate('carter-reject-transition');
     }
     if (this.screeningChecklistDetailVisual) {
       this.screeningChecklistDetailVisual.active = false;
     }
     this.previewOpen = false;
-    this.setManagedButtonsInteractable(true);
+    this.setManagedButtonsInteractable(true, 'threat-sequence-reject-unlock');
 
     this.startCarterThreatSequence();
     if (!this.threatSequenceActive) {
@@ -5203,7 +6892,10 @@ export class EvidencePreviewController extends Component {
     }
   }
 
-  private startCarterThreatSequence(showThreatDialogue: boolean = true): boolean {
+  private startCarterThreatSequence(
+    showThreatDialogue: boolean = true,
+    forceVisitorMonsterReveal: boolean = false,
+  ): boolean {
     const activeSubject = this.currentInspectionSubject;
     if (!activeSubject) {
       return false;
@@ -5214,7 +6906,7 @@ export class EvidencePreviewController extends Component {
       activeSubject.subjectKind === 'visitor' ? activeSubject.visitorKey : activeSubject.round.employeeKey;
     const isMonster =
       activeSubject.subjectKind === 'visitor'
-        ? activeSubject.caseKind === 'disguised-monster-visitor'
+        ? activeSubject.caseKind === 'disguised-monster-visitor' || forceVisitorMonsterReveal
         : activeSubject.round.caseKind === 'DISGUISED_MONSTER';
     if (!isMonster) {
       return false;
@@ -5269,6 +6961,7 @@ export class EvidencePreviewController extends Component {
     this.threatSequenceActive = true;
     this.emergencyWindowOpen = true;
     this.emergencyShutterSucceeded = false;
+    this.emergencyShutterCloseRequested = false;
     this.carterAttackTriggered = false;
     this.cleanupProgramActivated = false;
     this.phoneEmergencyResolved = false;
@@ -5277,10 +6970,16 @@ export class EvidencePreviewController extends Component {
     this.phoneResponseDeadlineMs = 0;
     this.phoneDialDeadlineMs = 0;
     this.emergencyDeadlineMs = 0;
+    this.monsterThreatGeneration += 1;
+    this.emergencyTimeoutGeneration = this.monsterThreatGeneration;
+    this.closedShutterProtectionGranted = false;
+    this.activeMonsterThreatDay = this.getActiveCampaignDayIndex();
+    this.activeMonsterThreatTiming = getMonsterThreatTimingForDay(this.activeMonsterThreatDay);
+    this.monsterThreatProtectionPhase = 'open-window';
 
     this.captureEncounterButtonStates();
-    this.setOnlyShutterInteractable();
-    this.shutterController.setInteractionEnabled(true);
+    this.setThreatEmergencyInteractable();
+    this.setShutterInteractionEnabledForInteractionTrace(true, 'threat-sequence-shutter-enable');
     if (this.carterCharacter?.isValid) {
       Tween.stopAllByTarget(this.carterCharacter);
       this.carterCharacter.active = true;
@@ -5288,6 +6987,7 @@ export class EvidencePreviewController extends Component {
     Tween.stopAllByTarget(this.carterCharacterSprite.node);
     this.carterCharacterSprite.spriteFrame = monsterPortrait;
     this.applyCarterPortraitContainSize(monsterPortrait);
+    AudioManager.getInstance()?.playCachedMonsterDisguiseRevealRoar();
     console.info('[MonsterReveal] portrait applied', {
       roundId: subjectRoundId,
       employeeKey: subjectKey,
@@ -5300,7 +7000,7 @@ export class EvidencePreviewController extends Component {
       employeeKey: subjectKey,
     });
     this.bindEmergencyCloseListener();
-    this.emergencyWindowOpen = true;
+    this.beginPhoneResponseWindow();
     this.startMonsterShutterResponseWindow();
     return true;
   }
@@ -5380,20 +7080,18 @@ export class EvidencePreviewController extends Component {
     if (this.cleanupProgramActivated) {
       return;
     }
-    if (!this.shutterHitButton?.node?.isValid || !this.shutterHitButton.interactable) {
-      console.warn('[CarterEmergency] shutter response window not started: shutter is not interactable');
+    const threatTiming = this.activeMonsterThreatTiming;
+    if (!threatTiming) {
       return;
     }
     this.unschedule(this.handleEmergencyTimeout);
-    this.emergencyDeadlineMs =
-      Date.now() + EvidencePreviewController.MONSTER_SHUTTER_RESPONSE_WINDOW_SECONDS * 1000;
-    this.scheduleOnce(
-      this.handleEmergencyTimeout,
-      EvidencePreviewController.MONSTER_SHUTTER_RESPONSE_WINDOW_SECONDS,
+    const openWindowBreakSeconds = threatTiming.openWindowBreakSeconds;
+    this.emergencyDeadlineMs = Date.now() + openWindowBreakSeconds * 1000;
+    this.emergencyTimeoutGeneration = this.monsterThreatGeneration;
+    this.scheduleOnce(this.handleEmergencyTimeout, openWindowBreakSeconds);
+    this.logMonsterThreatTiming(
+      `started phase=open-window day=${this.activeMonsterThreatDay} seconds=${openWindowBreakSeconds}`,
     );
-    console.info('[CarterEmergency] shutter response window started', {
-      seconds: EvidencePreviewController.MONSTER_SHUTTER_RESPONSE_WINDOW_SECONDS,
-    });
   }
 
   private beginPhoneResponseWindow(): void {
@@ -5401,9 +7099,11 @@ export class EvidencePreviewController extends Component {
       this.triggerCarterBreakthroughFailure('phone-pickup-timeout');
       return;
     }
-    console.info('[CarterEmergency] phone response window started');
+    if (this.cleanupProgramActivated || this.carterAttackTriggered || this.carterEncounterResolved) {
+      return;
+    }
     this.phoneResponseWindowOpen = true;
-    this.phoneResponseDeadlineMs = Date.now() + this.phonePickupWindowSeconds * 1000;
+    this.phoneResponseDeadlineMs = 0;
     this.phoneDialWindowOpen = false;
     this.phoneDialDeadlineMs = 0;
     this.cleanupProgramActivated = false;
@@ -5413,11 +7113,10 @@ export class EvidencePreviewController extends Component {
     this.emergencyTelephoneOverrideActive = true;
     this.telephoneController.setEmergencyAccessOverride(true);
     this.telephoneController.armEmergencyMode();
-    this.telephoneController.setTelephoneEntryEnabled(true);
-    this.refreshCampaignEvidenceAvailability();
-    this.setOnlyTelephoneInteractable();
+    this.setTelephoneEntryEnabledForInteractionTrace(true, 'threat-sequence-phone-entry');
+    this.refreshCampaignEvidenceAvailability('decision-resolution');
+    this.setThreatEmergencyInteractable();
     this.unschedule(this.handlePhonePickupTimeout);
-    this.scheduleOnce(this.handlePhonePickupTimeout, this.phonePickupWindowSeconds);
   }
 
   private beginPhoneDialWindow(): void {
@@ -5425,18 +7124,30 @@ export class EvidencePreviewController extends Component {
       this.triggerCarterBreakthroughFailure('dial-timeout');
       return;
     }
+    if (this.phoneDialWindowOpen) {
+      return;
+    }
+    const threatTiming = this.activeMonsterThreatTiming;
+    if (!threatTiming) {
+      this.triggerCarterBreakthroughFailure('dial-timeout');
+      return;
+    }
+    this.phoneResponseWindowOpen = false;
+    this.phoneResponseDeadlineMs = 0;
+    const phoneDialSeconds = threatTiming.phoneDialSeconds;
     this.phoneDialWindowOpen = true;
-    this.phoneDialDeadlineMs = Date.now() + this.phoneDialWindowSeconds * 1000;
-    console.info('[CarterEmergency] dial window started');
+    this.phoneDialDeadlineMs = Date.now() + phoneDialSeconds * 1000;
+    this.logMonsterThreatTiming(
+      `phone entry started day=${this.activeMonsterThreatDay} seconds=${phoneDialSeconds}`,
+    );
     this.bindEmergencyCallSubmittedListener();
-    this.telephoneController.setTelephoneEntryEnabled(false);
     this.telephoneController.resetDialInput();
     this.telephoneController.showEmergencyStatus(
       `DIAL ${EvidencePreviewController.PURGE_PHONE_CODE}`,
     );
     this.telephoneController.setEmergencyInputEnabled(true);
     this.unschedule(this.handleDialCodeTimeout);
-    this.scheduleOnce(this.handleDialCodeTimeout, this.phoneDialWindowSeconds);
+    this.scheduleOnce(this.handleDialCodeTimeout, phoneDialSeconds);
   }
 
   private activateCleanupProgram(): void {
@@ -5449,6 +7160,7 @@ export class EvidencePreviewController extends Component {
     this.phoneResponseWindowOpen = false;
     this.phoneDialWindowOpen = false;
     this.carterEncounterResolved = true;
+    this.monsterThreatProtectionPhase = 'resolved';
     this.phoneResponseDeadlineMs = 0;
     this.phoneDialDeadlineMs = 0;
     this.emergencyDeadlineMs = 0;
@@ -5470,9 +7182,9 @@ export class EvidencePreviewController extends Component {
     this.telephoneController?.setEmergencyInputEnabled(false);
     this.emergencyTelephoneOverrideActive = false;
     this.telephoneController?.setEmergencyAccessOverride(false);
-    this.telephoneController?.setTelephoneEntryEnabled(false);
+    this.setTelephoneEntryEnabledForInteractionTrace(false, 'cleanup-program-activated');
     this.telephoneController?.showEmergencyStatus('CLEANUP ACTIVE');
-    this.shutterController?.setInteractionEnabled(false);
+    this.setShutterInteractionEnabledForInteractionTrace(false, 'cleanup-program-activated');
     if (this.telephoneController) {
       this.telephoneController.setEmergencyInputEnabled(false);
     }
@@ -5485,15 +7197,16 @@ export class EvidencePreviewController extends Component {
     if (this.denyHitButton?.node?.isValid) {
       this.denyHitButton.interactable = false;
     }
-    this.lockAllEncounterInput();
-    this.refreshCampaignEvidenceAvailability();
+    this.lockAllEncounterInput('cleanup-program-activated');
+    this.refreshCampaignEvidenceAvailability('cleanup');
+    this.logMonsterThreatTiming('resolved');
     console.info('CLEANUP PROGRAM ACTIVATED');
     console.info('THREAT ELIMINATED');
     this.completeCurrentInspectionSubjectAfterCleanup();
   }
 
   private completeCurrentInspectionSubjectAfterCleanup(): void {
-    this.lockAllEncounterInput();
+    this.lockAllEncounterInput('cleanup-transition-scheduled');
     if (this.cleanupTransitionScheduled) {
       return;
     }
@@ -5518,6 +7231,7 @@ export class EvidencePreviewController extends Component {
     this.registerActiveGameOver(reason);
     this.carterAttackTriggered = true;
     this.carterEncounterResolved = true;
+    this.monsterThreatProtectionPhase = 'failed';
     this.phoneEmergencyResolved = true;
     this.cleanupProgramActivated = false;
     this.threatSequenceActive = false;
@@ -5535,7 +7249,7 @@ export class EvidencePreviewController extends Component {
     this.unschedule(this.handleCleanupTransitionComplete);
     this.cleanupTransitionScheduled = false;
     this.delayedDamagedShutterSwitchScheduled = false;
-    this.inspectionDecisionResolutionInProgress = false;
+    this.setInspectionDecisionResolutionInProgress(false, 'carter-breakthrough-failure');
     this.unbindEmergencyCloseListener();
     this.unbindEmergencyShutterClosedSettledListener();
     this.unbindEmergencyPhoneOpenedListener();
@@ -5543,16 +7257,20 @@ export class EvidencePreviewController extends Component {
     this.unbindDamagedShutterAppliedListener();
     this.shutterController?.stopShutterImpactLoop();
     this.telephoneController?.closeEmergencyPhone();
-    this.telephoneController?.setTelephoneEntryEnabled(false);
-    this.shutterController?.setInteractionEnabled(false);
-    this.lockAllEncounterInput();
+    this.setTelephoneEntryEnabledForInteractionTrace(false, 'carter-breakthrough-failure');
+    this.setShutterInteractionEnabledForInteractionTrace(false, 'carter-breakthrough-failure');
+    this.lockAllEncounterInput('carter-breakthrough-failure');
     this.administrativeGameOverActive = false;
     this.currentAdministrativeGameOverReason = null;
     this.invalidateInternalContaminationVisuals();
     this.hideCarterThreatReplyCompletely();
-    this.commitActiveMonsterFullbodyPresentation(`breakthrough-${reason}`);
+    const presentationTag = `breakthrough-${reason}`;
+    const fullbodyPresented = this.commitActiveMonsterFullbodyPresentation(presentationTag);
     if (this.carterMonsterAttackRuntime?.isValid) {
       this.carterMonsterAttackRuntime.active = true;
+    }
+    if (fullbodyPresented) {
+      this.playMonsterGameOverAudioCueIfNeeded();
     }
     if (this.carterGameOverPanelRuntime?.isValid) {
       this.carterGameOverPanelRuntime.active = false;
@@ -5587,16 +7305,27 @@ export class EvidencePreviewController extends Component {
   }
 
   private handleEmergencyTimeout = (): void => {
-    if (!this.threatSequenceActive || !this.emergencyWindowOpen) {
+    if (!this.threatSequenceActive) {
       return;
     }
     if (this.carterEncounterResolved || this.cleanupProgramActivated || this.carterAttackTriggered) {
       return;
     }
+    if (
+      this.monsterThreatProtectionPhase !== 'open-window' &&
+      this.monsterThreatProtectionPhase !== 'closed-shutter'
+    ) {
+      return;
+    }
+    if (this.emergencyTimeoutGeneration !== this.monsterThreatGeneration) {
+      return;
+    }
+    this.logMonsterThreatTiming(`timeout phase=${this.monsterThreatProtectionPhase}`);
     this.triggerCarterBreakthroughFailure('shutter-timeout');
   };
 
   private resetCarterMonsterFlow(restoreButtons: boolean): void {
+    this.stopMonsterGameOverAlarmAudio();
     this.unschedule(this.handleEmergencyTimeout);
     this.unschedule(this.handleDelayedDamagedShutterSwitch);
     this.unschedule(this.handlePhonePickupTimeout);
@@ -5605,7 +7334,7 @@ export class EvidencePreviewController extends Component {
     this.unschedule(this.handleCleanupTransitionComplete);
     this.cleanupTransitionScheduled = false;
     this.delayedDamagedShutterSwitchScheduled = false;
-    this.inspectionDecisionResolutionInProgress = false;
+    this.setInspectionDecisionResolutionInProgress(false, 'reset-carter-monster-flow');
     this.currentAdministrativeGameOverReason = null;
     this.activeGameOverContext = null;
     this.failureReviewActive = false;
@@ -5619,6 +7348,7 @@ export class EvidencePreviewController extends Component {
     this.unbindDamagedShutterAppliedListener();
     this.emergencyWindowOpen = false;
     this.emergencyShutterSucceeded = false;
+    this.emergencyShutterCloseRequested = false;
     this.threatSequenceActive = false;
     this.carterAttackTriggered = false;
     this.emergencyDeadlineMs = 0;
@@ -5626,6 +7356,11 @@ export class EvidencePreviewController extends Component {
     this.phoneResponseDeadlineMs = 0;
     this.phoneDialWindowOpen = false;
     this.phoneDialDeadlineMs = 0;
+    this.monsterThreatProtectionPhase = 'idle';
+    this.activeMonsterThreatTiming = null;
+    this.closedShutterProtectionGranted = false;
+    this.monsterThreatGeneration += 1;
+    this.emergencyTimeoutGeneration = this.monsterThreatGeneration;
     this.cleanupProgramActivated = false;
     this.phoneEmergencyResolved = false;
     this.rejectFlowRequested = false;
@@ -5634,10 +7369,12 @@ export class EvidencePreviewController extends Component {
     this.anxiousReplyShown = false;
 
     this.hideCarterThreatReplyCompletely();
-    this.telephoneController?.closeEmergencyPhone();
     this.emergencyTelephoneOverrideActive = false;
-    this.telephoneController?.setEmergencyAccessOverride(false);
-    this.telephoneController?.setTelephoneEntryEnabled(false);
+    if (!this.isDestroying) {
+      this.telephoneController?.closeEmergencyPhone();
+      this.telephoneController?.setEmergencyAccessOverride(false);
+      this.setTelephoneEntryEnabledForInteractionTrace(false, 'reset-carter-monster-flow');
+    }
     this.shutterController?.stopShutterImpactLoop();
     if (this.carterMonsterAttackRuntime?.isValid) {
       this.carterMonsterAttackRuntime.active = false;
@@ -5653,8 +7390,13 @@ export class EvidencePreviewController extends Component {
     }
     this.restoreCarterCharacterBaseSize();
     if (this.shutterController?.isValid) {
-      this.shutterController.restoreNormalVisual();
-      this.shutterController.setInteractionEnabled(this.getCachedButtonInteractable('BtnShutterHit'));
+      if (!this.isDestroying) {
+        this.shutterController.restoreNormalVisual();
+        this.setShutterInteractionEnabledForInteractionTrace(
+          this.getCachedButtonInteractable('BtnShutterHit'),
+          'restore-encounter-state-shutter',
+        );
+      }
     }
 
     if (restoreButtons) {
@@ -5662,7 +7404,10 @@ export class EvidencePreviewController extends Component {
         this.restoreEncounterButtonStates();
       }
     }
-    this.refreshCampaignEvidenceAvailability();
+    if (!this.isDestroying) {
+      this.refreshCampaignEvidenceAvailability('cleanup');
+    }
+    this.logMonsterThreatTiming('cancelled reason=reset-carter-monster-flow');
     this.encounterButtonStateCache.clear();
   }
 
@@ -5747,18 +7492,33 @@ export class EvidencePreviewController extends Component {
     if (this.shutterHitButton?.node?.isValid) {
       this.shutterHitButton.interactable = true;
     }
-    this.telephoneController?.setTelephoneEntryEnabled(false);
+    this.setTelephoneEntryEnabledForInteractionTrace(false, 'shutter-only-mode');
   }
 
   private setOnlyTelephoneInteractable(): void {
     this.setAllEncounterButtonsInteractable(false);
-    this.telephoneController?.setTelephoneEntryEnabled(true);
+    this.setTelephoneEntryEnabledForInteractionTrace(true, 'telephone-only-mode');
   }
 
-  private lockAllEncounterInput(): void {
+  private setThreatEmergencyInteractable(): void {
     this.setAllEncounterButtonsInteractable(false);
-    this.telephoneController?.setTelephoneEntryEnabled(false);
-    this.shutterController?.setInteractionEnabled(false);
+    if (this.shutterHitButton?.node?.isValid) {
+      this.shutterHitButton.interactable = true;
+    }
+    this.setTelephoneEntryEnabledForInteractionTrace(true, 'threat-sequence-emergency-access');
+  }
+
+  private lockAllEncounterInput(reason: string = 'unspecified'): void {
+    this.logInteractionTrace('lock-all', {
+      reason,
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+    });
+    this.setAllEncounterButtonsInteractable(false);
+    this.setTelephoneEntryEnabledForInteractionTrace(false, `lock-all:${reason}`);
+    this.setShutterInteractionEnabledForInteractionTrace(false, `lock-all:${reason}`);
+    this.logInteractionStateSnapshot(`lock-all:${reason}`);
   }
 
   private hideThreatReplyPanel(): void {
@@ -6314,7 +8074,7 @@ export class EvidencePreviewController extends Component {
       return;
     }
     const [panelSf, titleSf, retrySf, reviveSf] = await Promise.all([
-      this.loadSpriteFrameFromResources('ui/game/fail/ui_game_fail_panel/spriteFrame'),
+      this.loadSpriteFrameFromResources('ui/game/fail/ui_game_fail_panel_webp_v1/spriteFrame'),
       this.loadSpriteFrameFromResources('ui/game/fail/ui_game_fail_title/spriteFrame'),
       this.loadSpriteFrameFromResources('ui/game/fail/ui_game_fail_btn_retry/spriteFrame'),
       this.loadSpriteFrameFromResources('ui/game/fail/ui_game_fail_btn_revive/spriteFrame'),
@@ -6424,7 +8184,11 @@ export class EvidencePreviewController extends Component {
     this.carterGameOverReviewTextCoverGraphics.fill();
   }
 
-  private applyComplaintTerminationLayout(titleLabel: Label | null, messageLabel: Label | null): void {
+  private applyComplaintTerminationLayout(
+    reason: AdministrativeGameOverReason,
+    titleLabel: Label | null,
+    messageLabel: Label | null,
+  ): void {
     if (!this.carterGameOverPanelRuntime || !this.carterGameOverPanelVisual || !this.carterGameOverRetryVisual) {
       return;
     }
@@ -6433,8 +8197,8 @@ export class EvidencePreviewController extends Component {
       // Complaint notice uses a taller paper presentation while keeping aspect ratio.
       this.applyContainSize(this.carterGameOverPanelVisual, this.carterGameOverPanelSprite.spriteFrame, 680, 860);
     }
-    this.setNodeSize(this.carterGameOverPanelRuntime, 620, 840);
-    this.carterGameOverPanelRuntime.setPosition(0, -24, 0);
+    this.setNodeSize(this.carterGameOverPanelRuntime, 720, 1280);
+    this.carterGameOverPanelRuntime.setPosition(0, 0, 0);
     this.carterGameOverPanelVisual.setPosition(0, 0, 0);
     this.carterGameOverPanelVisual.setSiblingIndex(0);
 
@@ -6454,52 +8218,53 @@ export class EvidencePreviewController extends Component {
     const panelHeight = panelTransform?.contentSize.height ?? 560;
     const halfWidth = panelWidth * 0.5;
     const halfHeight = panelHeight * 0.5;
-    const topInset = 48;
-    const bottomInset = 30;
-    const sideInset = 78;
+    const topInset = 56;
+    const bottomInset = 52;
+    const sideInset = 64;
     const paperTop = halfHeight - topInset;
     const paperBottom = -halfHeight + bottomInset;
 
-    const titleWidth = Math.max(420, Math.min(560, panelWidth - 120));
-    const titleHeight = 72;
-    const titleY = paperTop - 37;
-    const textGroupOffsetY = -22;
+    const titleWidth = Math.max(450, Math.min(590, panelWidth - 92));
+    const titleHeight = 84;
+    const complaintNoticeGroupOffsetY = reason === 'multiple-formal-complaints' ? 60 : 0;
+    const titleY = paperTop - titleHeight * 0.5 - complaintNoticeGroupOffsetY;
     if (this.carterGameOverTitleLabel?.isValid) {
       this.carterGameOverTitleLabel.active = true;
-      this.carterGameOverTitleLabel.setPosition(0, titleY + textGroupOffsetY, 0);
+      this.carterGameOverTitleLabel.setPosition(0, titleY, 0);
       this.setNodeSize(this.carterGameOverTitleLabel, titleWidth, titleHeight);
     }
     if (titleLabel) {
-      titleLabel.string = COMPLAINT_TERMINATION_TITLE;
       titleLabel.color = new Color(129, 34, 31, 255);
-      titleLabel.fontSize = 44;
-      titleLabel.lineHeight = 52;
+      titleLabel.fontSize = 52;
+      titleLabel.lineHeight = 60;
       titleLabel.horizontalAlign = Label.HorizontalAlign.CENTER;
       titleLabel.verticalAlign = Label.VerticalAlign.CENTER;
       titleLabel.overflow = Overflow.CLAMP;
       titleLabel.enableWrapText = false;
     }
 
-    const dividerY = titleY - 29 - 10;
+    const dividerY = titleY - titleHeight * 0.5 - 26;
     if (this.carterGameOverDividerVisual?.isValid) {
       this.carterGameOverDividerVisual.active = true;
-      this.carterGameOverDividerVisual.setPosition(0, dividerY + textGroupOffsetY, 0);
-      this.setNodeSize(this.carterGameOverDividerVisual, titleWidth - 90, 8);
+      this.carterGameOverDividerVisual.setPosition(0, dividerY, 0);
+      this.setNodeSize(this.carterGameOverDividerVisual, titleWidth - 86, 8);
     }
     if (this.carterGameOverDividerGraphics) {
       this.carterGameOverDividerGraphics.clear();
       this.carterGameOverDividerGraphics.lineWidth = 2;
       this.carterGameOverDividerGraphics.strokeColor = new Color(108, 86, 64, 255);
-      this.carterGameOverDividerGraphics.moveTo(-(titleWidth - 90) * 0.5, 0);
-      this.carterGameOverDividerGraphics.lineTo((titleWidth - 90) * 0.5, 0);
+      this.carterGameOverDividerGraphics.moveTo(-(titleWidth - 86) * 0.5, 0);
+      this.carterGameOverDividerGraphics.lineTo((titleWidth - 86) * 0.5, 0);
       this.carterGameOverDividerGraphics.stroke();
     }
 
     const retryTransform = this.carterGameOverRetryVisual.getComponent(UITransform);
     const retryHeight = retryTransform?.contentSize.height ?? 92;
-    const retryY = paperBottom + 14 + retryHeight * 0.5;
-    const buttonRowY = retryY + 14;
-    const logoY = retryY + retryHeight * 0.5 + 12 + 62;
+    const retryY = paperBottom + retryHeight * 0.5;
+    const buttonRowY = retryY;
+    const buttonTopY = buttonRowY + retryHeight * 0.5;
+    const bodyButtonGap = 52;
+    const logoY = buttonTopY + 26;
     if (this.carterGameOverCompanyLogoVisual?.isValid) {
       const logoFrame = this.complaintCompanyLogoFrame;
       this.carterGameOverCompanyLogoVisual.active = Boolean(logoFrame);
@@ -6531,24 +8296,23 @@ export class EvidencePreviewController extends Component {
     }
     const logoHeight =
       this.carterGameOverCompanyLogoVisual?.getComponent(UITransform)?.contentSize.height ?? 76;
-    const bodyTop = dividerY - 22;
-    const bodyBottom = logoY + logoHeight * 0.5 + 12;
-    const bodyHeight = Math.max(180, bodyTop - bodyBottom);
+    const bodyTop = dividerY - 30;
+    const bodyBottom = Math.max(buttonTopY + bodyButtonGap, logoY + logoHeight * 0.5 + 12);
+    const bodyHeight = Math.max(220, bodyTop - bodyBottom);
     const bodyWidth = panelWidth - sideInset * 2;
     const bodyCenterY = bodyBottom + bodyHeight * 0.5;
     if (this.carterGameOverMessageLabel?.isValid) {
       this.carterGameOverMessageLabel.active = true;
-      this.carterGameOverMessageLabel.setPosition(0, bodyCenterY + textGroupOffsetY, 0);
+      this.carterGameOverMessageLabel.setPosition(0, bodyCenterY, 0);
       this.setNodeSize(this.carterGameOverMessageLabel, bodyWidth, bodyHeight);
     }
     if (messageLabel) {
-      messageLabel.string = COMPLAINT_TERMINATION_BODY;
       messageLabel.color = new Color(42, 35, 30, 255);
-      messageLabel.fontSize = 29;
-      messageLabel.lineHeight = 38;
+      messageLabel.fontSize = 34;
+      messageLabel.lineHeight = 46;
       messageLabel.horizontalAlign = Label.HorizontalAlign.LEFT;
       messageLabel.verticalAlign = Label.VerticalAlign.TOP;
-      messageLabel.overflow = Overflow.SHRINK;
+      messageLabel.overflow = Overflow.CLAMP;
       messageLabel.enableWrapText = true;
     }
 
@@ -6585,6 +8349,7 @@ export class EvidencePreviewController extends Component {
     if (this.retryLoadInProgress || this.reviveResolutionInProgress) {
       return;
     }
+    this.stopMonsterGameOverAlarmAudio();
     this.dismissDayCompletionOverlayForGameOver();
     this.failureReviewActive = false;
     this.resetFailureReviewPageAdvanceGuard();
@@ -6633,6 +8398,7 @@ export class EvidencePreviewController extends Component {
     if (!gameOverContext) {
       return;
     }
+    this.stopMonsterGameOverAlarmAudio();
     if (!this.failureReviewActive) {
       const entries = this.buildFailureReviewEntriesForReason(gameOverContext.reason);
       this.showFailureReview(gameOverContext.reason, entries);
@@ -6644,7 +8410,7 @@ export class EvidencePreviewController extends Component {
     void this.resolveReviveFromFailureReview(gameOverContext).catch((error) => {
       console.error('[Revive] Failed to resolve revive flow.', error);
       this.reviveResolutionInProgress = false;
-      this.lockAllEncounterInput();
+      this.lockAllEncounterInput('revive-flow-exception');
     });
   };
 
@@ -8051,8 +9817,8 @@ export class EvidencePreviewController extends Component {
     this.invalidateFailureReviewVisuals();
     this.hideFailureReviewRuntime();
     this.decisionResolutionToken += 1;
-    this.inspectionDecisionResolutionInProgress = false;
-    this.lockAllEncounterInput();
+    this.setInspectionDecisionResolutionInProgress(false, 'revive-reset');
+    this.lockAllEncounterInput('revive-reset');
     this.clearDayTransitionTransientState();
     this.hideInternalContaminationMonsterVisuals();
     this.invalidateInternalContaminationVisuals();
@@ -8085,9 +9851,10 @@ export class EvidencePreviewController extends Component {
 
     const restartedDayConfig = campaignState.restartCurrentDay(failedDayIndex);
     this.activeDayConfig = restartedDayConfig;
+    this.recordDayStartDecisionErrorBaseline('revive-restart-day');
     this.configureCampaignShiftClock(restartedDayConfig);
     this.applyCampaignConfigurationToControllers();
-    this.refreshCampaignEvidenceAvailability();
+    this.refreshCampaignEvidenceAvailability('game-over');
     this.resetChecklistState();
 
     if (restartedDayConfig.dayIndex === 4) {
@@ -8183,7 +9950,7 @@ export class EvidencePreviewController extends Component {
     this.restoreFailureReviewOverlaySnapshot();
     this.failureReviewActive = false;
     this.hideFailureReviewRuntime();
-    this.lockAllEncounterInput();
+    this.lockAllEncounterInput('revive-restart-failure');
     this.reviveResolutionInProgress = false;
   }
 
@@ -8450,12 +10217,21 @@ export class EvidencePreviewController extends Component {
 
   private async bootstrapRoundEngine(): Promise<void> {
     assertDayCatalogValid();
+    if (consumeDay0EndingTestLaunchRequested()) {
+      await this.prepareDay0EndingResources();
+      this.enterDay0EndingDisplayTestMode();
+      this.setInspectionViewReady(true, 'day0-ending-test-ready');
+      return;
+    }
+    this.cleanupDay0EndingPhonePhase1State();
+    this.day0EndingDisplayTestActive = false;
     if (hasRequestedStartDay()) {
       const requestedStartDay = consumeRequestedStartDay();
       campaignState.startNewCampaignRunAtDay(requestedStartDay);
     }
     const dayConfig = campaignState.getCurrentDayConfig();
     this.activeDayConfig = dayConfig;
+    this.recordDayStartDecisionErrorBaseline('bootstrap');
     this.resetActiveDayQueueState();
     this.campaignDayTransitionInProgress = false;
     this.campaignImplementedContentComplete = false;
@@ -8471,7 +10247,7 @@ export class EvidencePreviewController extends Component {
     this.runPhase6AStaticSelfCheckOnce();
     this.runPhase6BStaticSelfCheckOnce();
     this.applyCampaignConfigurationToControllers();
-    this.refreshCampaignEvidenceAvailability();
+    this.refreshCampaignEvidenceAvailability('day-transition');
     this.resetChecklistState();
     this.logRoundBootstrap('start');
     const debugReport = runRoundEngineSelfCheck();
@@ -8480,10 +10256,17 @@ export class EvidencePreviewController extends Component {
         console.warn(`[RoundEngineDebug] ${check.name} failed${check.detail ? `: ${check.detail}` : ''}`);
       }
     }
-    const documentUuids = Object.values(SUBJECT_DOCUMENT_FRAME_UUIDS).flatMap((entry) => [
-      entry.employeeCard,
-      entry.applicationForm,
-    ]);
+    const roundSpriteUuids = this.roundGenerator.getAllRoundSpriteUuids();
+    const documentUuids = [
+      ...Object.values(SUBJECT_DOCUMENT_FRAME_UUIDS).flatMap((entry) => [
+        entry.employeeCard,
+        entry.applicationForm,
+      ]),
+      ...Object.values(VISITOR_DOCUMENT_FRAME_UUIDS).flatMap((entry) => [
+        entry.employeeCard,
+        entry.applicationForm,
+      ]),
+    ];
     const visitorVisualUuids = (['edward', 'nadia'] as const)
       .map((visitorKey) => getVisitorProfile(visitorKey))
       .filter((profile): profile is NonNullable<ReturnType<typeof getVisitorProfile>> => profile !== null)
@@ -8493,8 +10276,26 @@ export class EvidencePreviewController extends Component {
         profile.visuals.monsterPortraitSpriteFrameUuid,
         profile.visuals.monsterFullbodySpriteFrameUuid,
       ]);
-    const allUuids = [...this.roundGenerator.getAllRoundSpriteUuids(), ...documentUuids, ...visitorVisualUuids];
-    const unique = [...new Set(allUuids)];
+    console.error('[DEBUG preload source roundSpriteUuids]', roundSpriteUuids);
+    console.error('[DEBUG preload source documentUuids]', documentUuids);
+    console.error('[DEBUG preload source visitorVisualUuids]', visitorVisualUuids);
+    const allUuids = [
+      ...roundSpriteUuids,
+      ...documentUuids,
+      ...visitorVisualUuids,
+    ];
+    console.error('[DEBUG preload allUuids]', allUuids);
+    allUuids.forEach((item, index) => {
+      if (typeof item !== 'string') {
+        console.error(
+          '[DEBUG preload invalid uuid]',
+          index,
+          item,
+          Object.prototype.toString.call(item),
+        );
+      }
+    });
+    const unique = Array.from(new Set(allUuids));
     for (const uuid of unique) {
       try {
         const frame = await this.loadSpriteFrameByUuid(uuid);
@@ -8504,6 +10305,8 @@ export class EvidencePreviewController extends Component {
       }
     }
     this.logRoundBootstrap('preload complete');
+    await this.waitForFirstScreenVisualReadiness();
+    this.setInspectionViewReady(true, 'bootstrap-first-screen-ready');
     if (dayConfig.dayIndex !== 4) {
       this.buildActiveDayQueue(dayConfig);
     } else {
@@ -8524,6 +10327,462 @@ export class EvidencePreviewController extends Component {
     if (!introResult.ok) {
       console.error('[EvidencePreviewController] Failed to play first round intro.');
     }
+  }
+
+  private async waitForFirstScreenVisualReadiness(): Promise<void> {
+    const backgroundReadyPromise = this.mainInspectionWindowBackgroundReadyPromise;
+    if (!backgroundReadyPromise) {
+      return;
+    }
+    try {
+      await backgroundReadyPromise;
+    } catch (error) {
+      console.warn('[EvidencePreviewController] main window background readiness await failed.', error);
+    }
+  }
+
+  private async prepareDay0EndingResources(): Promise<void> {
+    if (!this.day0EndingPlayerDisguisedFrame) {
+      try {
+        const frame = await this.loadSpriteFrameByUuid(
+          EvidencePreviewController.DAY0_ENDING_PLAYER_DISGUISED_SPRITEFRAME_UUID,
+        );
+        if (frame?.isValid) {
+          this.day0EndingPlayerDisguisedFrame = frame;
+        } else {
+          console.warn(
+            '[EvidencePreviewController] Day0 ending disguised sprite frame resolved but invalid.',
+          );
+        }
+      } catch (error) {
+        console.warn(
+          '[EvidencePreviewController] Failed to prepare Day0 ending disguised sprite frame.',
+          error,
+        );
+      }
+    }
+
+    try {
+      await this.loadSpriteFrameByUuid(
+        EvidencePreviewController.DAY0_ENDING_PLAYER_TRUE_IDENTITY_PORTRAIT_SPRITEFRAME_UUID,
+      );
+    } catch (error) {
+      console.warn(
+        '[EvidencePreviewController] Failed to prepare Day0 ending true identity portrait sprite frame.',
+        error,
+      );
+    }
+
+    try {
+      const audioManager = AudioManager.getInstance();
+      if (!audioManager) {
+        console.warn('[EvidencePreviewController] AudioManager is unavailable; skipping Day0 ring preload.');
+        return;
+      }
+      const loader = audioManager as unknown as {
+        loadClip?: (id: unknown) => Promise<unknown>;
+      };
+      if (typeof loader.loadClip !== 'function') {
+        console.warn(
+          '[EvidencePreviewController] AudioManager.loadClip is unavailable; skipping Day0 ring preload.',
+        );
+        return;
+      }
+      const day0RingLoaded = await loader.loadClip(GameAudioCatalog.Day0UnknownNumberPhoneRingId);
+      if (!day0RingLoaded) {
+        console.warn('[EvidencePreviewController] Day0 unknown number phone ring clip preload returned null.');
+      }
+      const day0RevealMusicLoaded = await loader.loadClip(GameAudioCatalog.Day0IdentityRevealMusicId);
+      if (!day0RevealMusicLoaded) {
+        console.warn('[EvidencePreviewController] Day0 identity reveal music clip preload returned null.');
+      }
+    } catch (error) {
+      console.warn('[EvidencePreviewController] Failed to prepare Day0 ending audio clips.', error);
+    }
+  }
+
+  private enterDay0EndingDisplayTestMode(): void {
+    this.day0EndingDisplayTestActive = true;
+    this.initializeDay0EndingPhonePhase1State();
+    this.day0EndingPhoneReady = false;
+    this.activeDayConfig = null;
+    this.resetActiveDayQueueState();
+    this.setCurrentRoundAndSyncSubject(null);
+    this.campaignDayTransitionInProgress = false;
+    this.campaignImplementedContentComplete = false;
+    this.campaignDayCompletionPending = false;
+    this.campaignDayContinueRequested = false;
+    this.hasLoggedImplementedContentComplete = false;
+    this.emergencyTelephoneOverrideActive = false;
+    this.dayCompletionOverlayController?.hide();
+    this.shiftClockController?.stop();
+    this.shiftClockController?.clearCallbacks();
+    this.hasStartedCampaignShiftClock = false;
+    this.closePreview();
+    this.stopChecklistReplyTyping(true);
+    if (this.checklistQuestionPanelRuntime?.isValid) {
+      this.checklistQuestionPanelRuntime.active = false;
+    }
+    if (this.checklistReplyPanelRuntime?.isValid) {
+      this.checklistReplyPanelRuntime.active = false;
+    }
+    this.checklistQuestionPanelOpen = false;
+    this.checklistReplyPanelOpen = false;
+    this.previewOpen = false;
+    this.setManagedButtonsInteractable(false, 'day0-ending-test-lock');
+    this.lockAllEncounterInput('day0-ending-test');
+    this.setShutterInteractionEnabledForInteractionTrace(false, 'day0-ending-test-lock');
+
+    if (this.employeeCardVisual?.isValid) {
+      this.employeeCardVisual.active = false;
+    }
+    if (this.employeeCardHit?.isValid) {
+      this.employeeCardHit.active = false;
+    }
+    if (this.employeeCardHitButton?.node?.isValid) {
+      this.employeeCardHitButton.interactable = false;
+    }
+    if (this.applicationFormVisual?.isValid) {
+      this.applicationFormVisual.active = false;
+    }
+    if (this.applicationFormHit?.isValid) {
+      this.applicationFormHit.active = false;
+    }
+    if (this.applicationFormHitButton?.node?.isValid) {
+      this.applicationFormHitButton.interactable = false;
+    }
+    const screeningChecklistVisual = this.node.getChildByName('ScreeningChecklistVisual');
+    if (screeningChecklistVisual?.isValid) {
+      screeningChecklistVisual.active = false;
+    }
+    if (this.screeningChecklistHit?.isValid) {
+      this.screeningChecklistHit.active = false;
+    }
+    if (this.screeningChecklistHitButton?.node?.isValid) {
+      this.screeningChecklistHitButton.interactable = false;
+    }
+    if (this.shutterHitButton?.node?.isValid) {
+      this.shutterHitButton.node.active = false;
+      this.shutterHitButton.interactable = false;
+    }
+    if (this.allowHitButton?.node?.isValid) {
+      this.allowHitButton.node.active = false;
+      this.allowHitButton.interactable = false;
+    }
+    if (this.denyHitButton?.node?.isValid) {
+      this.denyHitButton.node.active = false;
+      this.denyHitButton.interactable = false;
+    }
+
+    const drawersClosedRuntime = this.node.getChildByName('EmployeeDrawersClosedRuntime');
+    if (drawersClosedRuntime?.isValid) {
+      // Keep drawer visuals visible during pre-reveal phase; only interaction is locked.
+      drawersClosedRuntime.active = true;
+      this.setEmployeeFilesInteractionEnabled(drawersClosedRuntime, false);
+      this.employeeFilesController?.closeOpenDrawerForExternalInteraction();
+    }
+    if (this.carterCharacter?.isValid) {
+      this.carterCharacter.active = false;
+    }
+    if (this.visitorGreetingRuntime?.isValid) {
+      this.visitorGreetingRuntime.active = false;
+    }
+    this.shutterController?.prepareClosedForIntro();
+
+    this.telephoneController?.setCampaignRegularAccessEnabled(true);
+    this.telephoneController?.setEmergencyAccessOverride(false);
+    this.telephoneController?.setDepartmentPhoneLookupEnabled(false);
+    this.setTelephoneEntryEnabledForInteractionTrace(false, 'day0-ending-test-wait-phone-ring');
+    if (this.telephoneVisual?.isValid) {
+      this.telephoneVisual.active = true;
+    }
+    if (this.telephoneHit?.isValid) {
+      this.telephoneHit.active = true;
+    }
+    if (this.telephoneHitButton?.node?.isValid) {
+      this.telephoneHitButton.interactable = false;
+    }
+    this.hideGuidancePanelImmediate(false);
+    if (this.guidanceHelpButtonNode?.isValid) {
+      this.guidanceHelpButtonNode.active = false;
+    }
+    if (this.guidanceHintButtonNode?.isValid) {
+      this.guidanceHintButtonNode.active = false;
+    }
+    this.visitorIntroController?.setDay0EndingDisplay();
+    console.log('[Day0BGM] enter ending mode, about to play music');
+    this.playDay0EndingIdentityRevealMusicOnce();
+    this.scheduleOnce(
+      this.handleDay0EndingPhoneDelayElapsed,
+      EvidencePreviewController.DAY0_ENDING_PHONE_DELAY_SECONDS,
+    );
+  }
+
+  private handleShutterHitClick(): void {
+    if (!this.day0EndingAwaitShutter) {
+      return;
+    }
+    // Shutter progression still continues from the open-settled listener so
+    // Day0 phase advancement happens only after the shutter is fully opened.
+  }
+
+  private armDay0EndingAwaitShutterPhase(): void {
+    if (!this.day0EndingDisplayTestActive) {
+      return;
+    }
+    this.day0EndingAwaitShutter = true;
+    this.applyDay0EndingPhase2DeskState();
+    this.shutterController?.prepareClosedForIntro();
+    this.setOnlyShutterInteractable();
+    this.setShutterInteractionEnabledForInteractionTrace(true, 'day0-ending-await-shutter');
+    if (this.shutterHitButton?.node?.isValid) {
+      this.shutterHitButton.node.active = true;
+      this.shutterHitButton.interactable = true;
+    }
+    this.bindDay0EndingShutterOpenSettledListener();
+  }
+
+  private handleDay0EndingShutterClick(): void {
+    if (!this.day0EndingDisplayTestActive || !this.day0EndingAwaitShutter) {
+      return;
+    }
+    this.day0EndingAwaitShutter = false;
+    this.day0EndingArchiveRevealActive = false;
+    this.unschedule(this.handleDay0EndingArchiveRevealDelayElapsed);
+    this.unbindDay0EndingShutterOpenSettledListener();
+    this.telephoneController?.clearDay0EndingUnknownNumberCallArmed();
+    this.telephoneController?.stopDay0EndingUnknownNumberCall(false);
+    this.telephoneController?.setEmergencyInputEnabled(false);
+    this.telephoneController?.setEmergencyAccessOverride(false);
+    this.telephoneController?.setCampaignRegularAccessEnabled(false);
+    this.setTelephoneEntryEnabledForInteractionTrace(false, 'day0-ending-shutter-clicked');
+    this.applyDay0EndingPhase2DeskState();
+    this.showDay0EndingDisguisedIdentity();
+    this.lockAllEncounterInput('day0-ending-shutter-clicked');
+    this.scheduleOnce(
+      this.handleDay0EndingArchiveRevealDelayElapsed,
+      EvidencePreviewController.DAY0_ENDING_ARCHIVE_REVEAL_DELAY_SECONDS,
+    );
+  }
+
+  private playDay0EndingIdentityRevealMusicOnce(): void {
+    console.log('[Day0BGM] playDay0EndingIdentityRevealMusicOnce entered');
+    if (this.day0EndingIdentityRevealMusicPlayed) {
+      return;
+    }
+    this.day0EndingIdentityRevealMusicPlayed = true;
+    const audio = AudioManager.getInstance() ?? AudioManager.ensureInstance();
+    console.log('[Day0BGM] calling AudioManager.playMusic');
+    audio.playMusic(GameAudioCatalog.Day0IdentityRevealMusicId, true, true);
+  }
+
+  private showDay0EndingDisguisedIdentity(): void {
+    if (!this.carterCharacterSprite || !this.day0EndingPlayerDisguisedFrame) {
+      this.preloadDay0EndingPlayerIdentityFrames();
+      return;
+    }
+    this.carterCharacterSprite.spriteFrame = this.day0EndingPlayerDisguisedFrame;
+    this.applyCarterPortraitContainSize(this.day0EndingPlayerDisguisedFrame);
+    if (this.carterCharacter?.isValid) {
+      this.carterCharacter.active = true;
+    }
+  }
+
+  private applyDay0EndingPhase2DeskState(): void {
+    if (this.employeeCardVisual?.isValid) {
+      this.employeeCardVisual.active = false;
+    }
+    if (this.employeeCardHit?.isValid) {
+      this.employeeCardHit.active = false;
+    }
+    if (this.employeeCardHitButton?.node?.isValid) {
+      this.employeeCardHitButton.interactable = false;
+    }
+    if (this.applicationFormVisual?.isValid) {
+      this.applicationFormVisual.active = false;
+    }
+    if (this.applicationFormHit?.isValid) {
+      this.applicationFormHit.active = false;
+    }
+    if (this.applicationFormHitButton?.node?.isValid) {
+      this.applicationFormHitButton.interactable = false;
+    }
+    if (this.screeningChecklistVisual?.isValid) {
+      this.screeningChecklistVisual.active = false;
+    }
+    if (this.screeningChecklistHit?.isValid) {
+      this.screeningChecklistHit.active = false;
+    }
+    if (this.screeningChecklistHitButton?.node?.isValid) {
+      this.screeningChecklistHitButton.interactable = false;
+    }
+    if (this.appointmentRosterVisual?.isValid) {
+      this.appointmentRosterVisual.active = false;
+    }
+    if (this.appointmentRosterHit?.isValid) {
+      this.appointmentRosterHit.active = false;
+    }
+    const appointmentRosterButton = this.appointmentRosterHit?.getComponent(Button) ?? null;
+    if (appointmentRosterButton?.node?.isValid) {
+      appointmentRosterButton.interactable = false;
+    }
+    if (this.allowHitButton?.node?.isValid) {
+      this.allowHitButton.node.active = false;
+      this.allowHitButton.interactable = false;
+    }
+    if (this.denyHitButton?.node?.isValid) {
+      this.denyHitButton.node.active = false;
+      this.denyHitButton.interactable = false;
+    }
+    if (this.telephoneVisual?.isValid) {
+      this.telephoneVisual.active = true;
+    }
+    if (this.telephoneHit?.isValid) {
+      this.telephoneHit.active = false;
+    }
+    if (this.telephoneHitButton?.node?.isValid) {
+      this.telephoneHitButton.interactable = false;
+    }
+    const drawersClosedRuntime = this.node.getChildByName('EmployeeDrawersClosedRuntime');
+    if (drawersClosedRuntime?.isValid) {
+      this.setEmployeeFilesInteractionEnabled(drawersClosedRuntime, false);
+      this.employeeFilesController?.closeOpenDrawerForExternalInteraction();
+    }
+  }
+
+  private activateDay0EndingArchiveRevealPhase3(): void {
+    if (!this.day0EndingDisplayTestActive || this.isDestroying) {
+      return;
+    }
+    this.day0EndingArchiveRevealActive = true;
+    this.showDay0EndingDisguisedIdentity();
+    this.setShutterInteractionEnabledForInteractionTrace(false, 'day0-ending-archive-reveal-active');
+    if (this.shutterHitButton?.node?.isValid) {
+      this.shutterHitButton.interactable = false;
+    }
+    this.setTelephoneEntryEnabledForInteractionTrace(false, 'day0-ending-archive-reveal-active');
+    if (this.telephoneHitButton?.node?.isValid) {
+      this.telephoneHitButton.interactable = false;
+    }
+
+    const drawersClosedRuntime = this.node.getChildByName('EmployeeDrawersClosedRuntime');
+    if (!drawersClosedRuntime?.isValid) {
+      return;
+    }
+    // Day0 ending reveal can arrive from states where employee files runtime was hidden.
+    // Force it visible before enabling file-only interaction.
+    drawersClosedRuntime.active = true;
+    this.setEmployeeFilesInteractionEnabled(drawersClosedRuntime, true);
+    this.employeeFilesController?.enterDay0EndingArchiveRevealMode('ethan');
+  }
+
+  private initializeDay0EndingPhonePhase1State(): void {
+    this.unschedule(this.handleDay0EndingPhoneDelayElapsed);
+    this.unschedule(this.handleDay0EndingPhoneRingElapsed);
+    this.unschedule(this.handleDay0EndingArchiveRevealDelayElapsed);
+    this.unschedule(this.handleDay0EndingSelfDialogueHoldElapsed);
+    this.unbindDay0EndingShutterOpenSettledListener();
+    this.day0EndingPhoneActive = false;
+    this.day0EndingPhoneReady = false;
+    this.day0EndingPhoneSequenceStarted = false;
+    this.day0EndingPhoneSequenceCompleted = false;
+    this.day0EndingTelephoneStoryLock = false;
+    this.day0EndingAwaitShutter = false;
+    this.day0EndingIdentityRevealMusicPlayed = false;
+    this.day0EndingArchiveRevealActive = false;
+    this.day0EndingSelfDialogueInProgress = false;
+    this.day0EndingSelfDialogueCompleted = false;
+    this.day0EndingSelfDialogueFinalChoiceQueued = false;
+    this.day0EndingSelfDialogueToken += 1;
+    this.day0EndingFinalChoiceActive = false;
+    this.day0EndingFinalChoiceCompleted = false;
+    this.day0EndingFinalChoiceTransitionInProgress = false;
+    this.day0EndingFinalChoiceSelection = null;
+    this.unschedule(this.handleDay0EndingRemoveThreatAlertElapsed);
+    this.unschedule(this.handleDay0EndingRemoveThreatFinalizeElapsed);
+    this.unschedule(this.handleDay0EndingRemoveThreatReturnHomeElapsed);
+    this.setDay0EndingFinalChoiceVisible(false);
+    AudioManager.getInstance()?.stopAlarmLoop();
+    this.employeeFilesController?.exitDay0EndingArchiveRevealMode();
+    this.telephoneController?.clearDay0EndingUnknownNumberCallArmed();
+    this.telephoneController?.stopDay0EndingUnknownNumberCall(false);
+    this.telephoneController?.setDay0EndingTelephoneStoryLock(false);
+  }
+
+  private cleanupDay0EndingPhonePhase1State(): void {
+    this.cleanupDay0EndingPhonePhase1LocalState();
+    this.employeeFilesController?.exitDay0EndingArchiveRevealMode();
+    this.telephoneController?.clearDay0EndingUnknownNumberCallArmed();
+    this.telephoneController?.stopDay0EndingUnknownNumberCall(false);
+    this.telephoneController?.setDay0EndingTelephoneStoryLock(false);
+  }
+
+  private cleanupDay0EndingPhonePhase1LocalState(): void {
+    this.unschedule(this.handleDay0EndingPhoneDelayElapsed);
+    this.unschedule(this.handleDay0EndingPhoneRingElapsed);
+    this.unschedule(this.handleDay0EndingArchiveRevealDelayElapsed);
+    this.unschedule(this.handleDay0EndingSelfDialogueHoldElapsed);
+    this.unbindDay0EndingShutterOpenSettledListener();
+    this.day0EndingPhoneActive = false;
+    this.day0EndingPhoneReady = false;
+    this.day0EndingPhoneSequenceStarted = false;
+    this.day0EndingPhoneSequenceCompleted = false;
+    this.day0EndingTelephoneStoryLock = false;
+    this.day0EndingAwaitShutter = false;
+    this.day0EndingIdentityRevealMusicPlayed = false;
+    this.day0EndingArchiveRevealActive = false;
+    this.day0EndingSelfDialogueInProgress = false;
+    this.day0EndingSelfDialogueCompleted = false;
+    this.day0EndingSelfDialogueFinalChoiceQueued = false;
+    this.day0EndingSelfDialogueToken += 1;
+    this.day0EndingFinalChoiceActive = false;
+    this.day0EndingFinalChoiceCompleted = false;
+    this.day0EndingFinalChoiceTransitionInProgress = false;
+    this.day0EndingFinalChoiceSelection = null;
+    this.unschedule(this.handleDay0EndingRemoveThreatAlertElapsed);
+    this.unschedule(this.handleDay0EndingRemoveThreatFinalizeElapsed);
+    this.unschedule(this.handleDay0EndingRemoveThreatReturnHomeElapsed);
+    this.setDay0EndingFinalChoiceVisible(false);
+    AudioManager.getInstance()?.stopAlarmLoop();
+  }
+
+  private bindDay0EndingShutterOpenSettledListener(): void {
+    if (!this.shutterController || this.day0EndingShutterOpenSettledListenerRegistered) {
+      return;
+    }
+    this.shutterController.addShutterOpenSettledListener(this.handleDay0EndingShutterOpenSettled);
+    this.day0EndingShutterOpenSettledListenerRegistered = true;
+  }
+
+  private unbindDay0EndingShutterOpenSettledListener(): void {
+    if (!this.shutterController || !this.day0EndingShutterOpenSettledListenerRegistered) {
+      return;
+    }
+    this.shutterController.removeShutterOpenSettledListener(this.handleDay0EndingShutterOpenSettled);
+    this.day0EndingShutterOpenSettledListenerRegistered = false;
+  }
+
+  private playDay0EndingPhoneRing(): void {
+    if (
+      !this.day0EndingPhoneActive ||
+      this.day0EndingPhoneSequenceStarted ||
+      !this.day0EndingDisplayTestActive ||
+      this.isDestroying
+    ) {
+      return;
+    }
+    const audio = AudioManager.getInstance();
+    audio?.playCachedDay0UnknownNumberPhoneRing();
+    const intervalSeconds = Math.max(
+      EvidencePreviewController.DAY0_ENDING_PHONE_RING_INTERVAL_SECONDS,
+      audio?.getCachedClipDurationSeconds(GameAudioCatalog.Day0UnknownNumberPhoneRingId) ??
+        EvidencePreviewController.DAY0_ENDING_PHONE_RING_INTERVAL_SECONDS,
+    );
+    this.unschedule(this.handleDay0EndingPhoneRingElapsed);
+    this.scheduleOnce(
+      this.handleDay0EndingPhoneRingElapsed,
+      intervalSeconds,
+    );
   }
 
   private async loadSpriteFrameByUuid(uuid: string): Promise<SpriteFrame> {
@@ -9215,37 +11474,45 @@ export class EvidencePreviewController extends Component {
     return this.isCampaignEvidenceEnabled('telephone');
   }
 
-  private refreshCampaignEvidenceAvailability(): void {
+  private refreshCampaignEvidenceAvailability(reason: string = 'campaign-evidence-refresh'): void {
+    if (this.isDestroying || !this.node?.isValid) {
+      return;
+    }
     const visitorModeActive = this.currentInspectionSubject?.subjectKind === 'visitor';
-    const employeeCardEnabled = this.isCampaignEvidenceEnabled('employee-card') && !visitorModeActive;
-    const applicationFormEnabled = this.isCampaignEvidenceEnabled('application-form') && !visitorModeActive;
-    const checklistEnabled = this.isCampaignEvidenceEnabled('checklist') && !visitorModeActive;
+    const employeeCardEnabled = this.isCampaignEvidenceEnabled('employee-card');
+    const applicationFormEnabled = this.isCampaignEvidenceEnabled('application-form');
+    const checklistEnabled = this.isCampaignEvidenceEnabled('checklist');
     const rosterEnabled = this.isCampaignEvidenceEnabled('appointment-roster');
+    this.logDay4DocumentRuntimeState(`refresh-before:${reason}`, 'refreshCampaignEvidenceAvailability');
     this.setEvidenceNodeAvailability({
       visual: this.employeeCardVisual,
       hit: this.employeeCardHit,
       button: this.employeeCardHitButton,
       enabled: employeeCardEnabled,
+      reason,
     });
     this.setEvidenceNodeAvailability({
       visual: this.applicationFormVisual,
       hit: this.applicationFormHit,
       button: this.applicationFormHitButton,
       enabled: applicationFormEnabled,
+      reason,
     });
     this.setEvidenceNodeAvailability({
       visual: this.appointmentRosterVisual,
       hit: this.appointmentRosterHit,
       button: this.appointmentRosterHit?.getComponent(Button) ?? null,
       enabled: rosterEnabled,
+      reason,
     });
     this.setEvidenceNodeAvailability({
       visual: this.screeningChecklistVisual,
       hit: this.screeningChecklistHit,
       button: this.screeningChecklistHitButton,
       enabled: checklistEnabled,
+      reason,
     });
-    this.setEmployeeFilesAvailability(!visitorModeActive);
+    this.setEmployeeFilesAvailability(this.isCampaignEvidenceEnabled('employee-files'));
     if (!employeeCardEnabled || !applicationFormEnabled) {
       const employeeCardOpen = this.employeeCardDetailVisual?.active ?? false;
       const applicationOpen = this.applicationFormDetailVisual?.active ?? false;
@@ -9257,7 +11524,9 @@ export class EvidencePreviewController extends Component {
     this.telephoneController?.setCampaignRegularAccessEnabled(this.isCampaignEvidenceEnabled('telephone'));
     this.telephoneController?.setEmergencyAccessOverride(this.emergencyTelephoneOverrideActive);
     this.telephoneController?.setDepartmentPhoneLookupEnabled(this.computeDepartmentPhoneLookupEnabled());
+    this.applyInspectionViewReadyToTelephone(reason);
     this.updateGuidanceButtonInteractivity();
+    this.logDay4DocumentRuntimeState(`refresh-after:${reason}`, 'refreshCampaignEvidenceAvailability');
   }
 
   private setEmployeeFilesAvailability(enabled: boolean): void {
@@ -9265,7 +11534,57 @@ export class EvidencePreviewController extends Component {
     if (!drawersClosedRuntime?.isValid) {
       return;
     }
-    drawersClosedRuntime.active = enabled;
+    const visualEnabled = this.inspectionViewReady;
+    drawersClosedRuntime.active = visualEnabled;
+    this.setEmployeeFilesInteractionEnabled(drawersClosedRuntime, enabled && visualEnabled);
+  }
+
+  private setEmployeeFilesInteractionEnabled(drawersClosedRuntime: Node, enabled: boolean): void {
+    const day0EndingArchiveFileOnlyMode = enabled && this.day0EndingArchiveRevealActive;
+    const drawerHitNames = [
+      'EmployeeDrawer01Hit',
+      'EmployeeDrawer02Hit',
+      'EmployeeDrawer03Hit',
+    ] as const;
+    for (const name of drawerHitNames) {
+      const hitNode = drawersClosedRuntime.getChildByName(name);
+      if (!hitNode?.isValid) {
+        continue;
+      }
+      const drawerHitEnabled = day0EndingArchiveFileOnlyMode ? false : enabled;
+      hitNode.active = drawerHitEnabled;
+      const button = hitNode.getComponent(Button);
+      if (button?.node?.isValid) {
+        button.enabled = drawerHitEnabled;
+        button.interactable = drawerHitEnabled;
+      }
+    }
+
+    const openRuntime = drawersClosedRuntime.getChildByName('EmployeeDrawersOpenRuntime');
+    if (!openRuntime?.isValid) {
+      return;
+    }
+    const fileHitNames = [
+      'EmployeeDrawer01FileHit',
+      'EmployeeDrawer02FileHit',
+      'EmployeeDrawer03FileHit',
+    ] as const;
+    for (const name of fileHitNames) {
+      const fileHitNode = openRuntime.getChildByName(name);
+      if (!fileHitNode?.isValid) {
+        continue;
+      }
+      if (day0EndingArchiveFileOnlyMode) {
+        fileHitNode.active = true;
+      } else if (!enabled) {
+        fileHitNode.active = false;
+      }
+      const button = fileHitNode.getComponent(Button);
+      if (button?.node?.isValid) {
+        button.enabled = enabled;
+        button.interactable = enabled;
+      }
+    }
   }
 
   private setEvidenceNodeAvailability(args: {
@@ -9273,15 +11592,39 @@ export class EvidencePreviewController extends Component {
     hit: Node | null;
     button: Button | null;
     enabled: boolean;
+    reason?: string;
   }): void {
+    const reason = args.reason ?? 'unspecified';
+    const day4Control = this.resolveDay4DocumentControl(args.visual, args.hit, args.button);
+    if (day4Control) {
+      const token = this.getCurrentInspectionSubjectToken() ?? 'none';
+      const visitorKey =
+        this.currentInspectionSubject?.subjectKind === 'visitor'
+          ? this.currentInspectionSubject.visitorKey
+          : 'none';
+      const onceKey = `availability-write-start:${day4Control}:${reason}:${this.decisionResolutionToken}:${token}`;
+      if (!this.day4DocumentTraceReasonOnce.has(onceKey) && this.isDay4VisitorDocumentTraceContext()) {
+        this.day4DocumentTraceReasonOnce.add(onceKey);
+        console.info(
+          `[Day4DocumentTrace] availability-write-start control=${day4Control} enabled=${args.enabled} callerReason=${reason} visitor=${visitorKey} token=${token}`,
+        );
+      }
+    }
+    const visibleEnabled = args.enabled && this.inspectionViewReady;
     if (args.visual?.isValid) {
-      args.visual.active = args.enabled;
+      args.visual.active = visibleEnabled;
     }
     if (args.hit?.isValid) {
-      args.hit.active = args.enabled;
+      args.hit.active = visibleEnabled;
     }
     if (args.button?.node?.isValid) {
-      args.button.interactable = args.enabled && args.button.interactable;
+      args.button.interactable = visibleEnabled;
+    }
+    if (day4Control) {
+      this.logDay4DocumentRuntimeState(
+        `availability-write-after:${day4Control}:${reason}`,
+        'setEvidenceNodeAvailability',
+      );
     }
   }
 
@@ -9448,16 +11791,16 @@ export class EvidencePreviewController extends Component {
     const stateAfterDay1Advance = campaignStateProbe.advanceToNextDay();
     const stateAfterDay2Advance = campaignStateProbe.advanceToNextDay();
 
-    push('1_highestImplementedDay', '4', String(HIGHEST_IMPLEMENTED_CAMPAIGN_DAY), HIGHEST_IMPLEMENTED_CAMPAIGN_DAY === 4);
+    push('1_highestImplementedDay', '6', String(HIGHEST_IMPLEMENTED_CAMPAIGN_DAY), HIGHEST_IMPLEMENTED_CAMPAIGN_DAY === 6);
     push('2_day1_not_last', 'false', String(isLastImplementedCampaignDay(1)), !isLastImplementedCampaignDay(1), 1, 2);
     push('3_day2_not_last', 'false', String(isLastImplementedCampaignDay(2)), !isLastImplementedCampaignDay(2), 2, 3);
     push('4_day3_is_not_last', 'false', String(isLastImplementedCampaignDay(3)), !isLastImplementedCampaignDay(3), 3, 4);
     push('5_day1_next_day2', '2', String(stateAfterDay1Advance.dayIndex), stateAfterDay1Advance.dayIndex === 2, 1, 2);
     push('6_day2_next_day3', '3', String(stateAfterDay2Advance.dayIndex), stateAfterDay2Advance.dayIndex === 3, 2, 3);
     push('7_day3_can_progress_day4', 'true', String(!isLastImplementedCampaignDay(3)), !isLastImplementedCampaignDay(3), 3, 4);
-    push('8_day1_queue_len', '3', String(queueSize(day1)), queueSize(day1) === 3, 1, 1);
-    push('9_day2_queue_len', '4', String(queueSize(day2)), queueSize(day2) === 4, 2, 2);
-    push('10_day3_queue_len', '4', String(queueSize(day3)), queueSize(day3) === 4, 3, 3);
+    push('8_day1_queue_len', '4', String(queueSize(day1)), queueSize(day1) === 4, 1, 1);
+    push('9_day2_queue_len', '5', String(queueSize(day2)), queueSize(day2) === 5, 2, 2);
+    push('10_day3_queue_len', '5', String(queueSize(day3)), queueSize(day3) === 5, 3, 3);
     push('11_queue_consume_not_day_complete', 'cursor-only-insufficient', 'requires shouldCompleteCurrentDay()', true);
     push('12_last_subject_settlement_required', 'advance entry controls completion', 'advanceToNextInspectionSubject()', true);
     push('13_transition_in_progress_guard', 'false at bootstrap', String(this.campaignDayTransitionInProgress), this.campaignDayTransitionInProgress === false);
@@ -9503,13 +11846,18 @@ export class EvidencePreviewController extends Component {
     push('39_day3_complete_no_new_round', 'contentComplete blocks generateNextRound', 'campaignImplementedContentComplete', true, 3, 4);
     push('40_retry_day4_preserves_day_index', 'day4 retry keeps day4 session', 'handleCarterGameOverRetryClick conditional reset', true);
     push('41_retry_day123_resets_day1', '1', String(new CampaignStateStore().resetCampaign().dayIndex), new CampaignStateStore().resetCampaign().dayIndex === 1);
-    push('42_retry_after_reset_day1_queue_size', '3', String(queueSize(day1)), queueSize(day1) === 3, 1, 1);
+    push('42_retry_after_reset_day1_queue_size', '4', String(queueSize(day1)), queueSize(day1) === 4, 1, 1);
     push('43_game_over_does_not_advance_day', 'guard present', 'isGameOverStateActive() blocks transition', true);
     push('44_onDestroy_interrupts_transition', 'set false', 'onDestroy -> campaignDayTransitionInProgress=false', true);
-    push('45_day123_case_composition_unchanged', 'as configured', `${queueSize(day1)}/${queueSize(day2)}/${queueSize(day3)}`, queueSize(day1) === 3 && queueSize(day2) === 4 && queueSize(day3) === 4);
+    push('45_day123_case_composition_unchanged', 'as configured', `${queueSize(day1)}/${queueSize(day2)}/${queueSize(day3)}`, queueSize(day1) === 4 && queueSize(day2) === 5 && queueSize(day3) === 5);
     push('46_shift_clock_math_untouched', 'assertShiftClockMathSelfCheck still used', String(EvidencePreviewController.hasRunShiftClockMathSelfCheck || true), true);
     push('47_purge_1214_unchanged', EvidencePreviewController.PURGE_PHONE_CODE, EvidencePreviewController.PURGE_PHONE_CODE, EvidencePreviewController.PURGE_PHONE_CODE === '1214');
-    push('48_shutter_10s_unchanged', '10', String(EvidencePreviewController.MONSTER_SHUTTER_RESPONSE_WINDOW_SECONDS), EvidencePreviewController.MONSTER_SHUTTER_RESPONSE_WINDOW_SECONDS === 10);
+    push(
+      '48_day1_open_window_6s',
+      '6',
+      String(getMonsterThreatTimingForDay(1).openWindowBreakSeconds),
+      getMonsterThreatTimingForDay(1).openWindowBreakSeconds === 6,
+    );
     push(
       '49_day4_to_day7_config_kept',
       'day4-7 exist',
@@ -9568,9 +11916,9 @@ export class EvidencePreviewController extends Component {
     push('4_day1_mode_next_day', 1, 'next-day', 'prepareCampaignDayCompletion overlayData.mode', true);
     push('5_day2_mode_next_day', 2, 'next-day', 'prepareCampaignDayCompletion overlayData.mode', true);
     push('6_day3_mode_content_complete', 3, 'implemented-content-complete', 'completeImplementedCampaignContent overlayData.mode', true);
-    push('7_day1_count_3_3', 1, '3/3', `${queueSize(day1)}/${queueSize(day1)}`, queueSize(day1) === 3);
-    push('8_day2_count_4_4', 2, '4/4', `${queueSize(day2)}/${queueSize(day2)}`, queueSize(day2) === 4);
-    push('9_day3_count_4_4', 3, '4/4', `${queueSize(day3)}/${queueSize(day3)}`, queueSize(day3) === 4);
+    push('7_day1_count_4_4', 1, '4/4', `${queueSize(day1)}/${queueSize(day1)}`, queueSize(day1) === 4);
+    push('8_day2_count_5_5', 2, '5/5', `${queueSize(day2)}/${queueSize(day2)}`, queueSize(day2) === 5);
+    push('9_day3_count_5_5', 3, '5/5', `${queueSize(day3)}/${queueSize(day3)}`, queueSize(day3) === 5);
     push('10_day1_next_day2', 1, '2', String(day1.dayIndex + 1), day1.dayIndex + 1 === 2);
     push('11_day2_next_day3', 2, '3', String(day2.dayIndex + 1), day2.dayIndex + 1 === 3);
     push('12_day3_no_next_day', 3, 'none', 'implemented-content-complete has no nextDayIndex', true);
@@ -9598,9 +11946,9 @@ export class EvidencePreviewController extends Component {
     push('34_day1_not_auto_transition', 1, 'manual only', 'handleCompletedDayAfterSettlement -> prepareCampaignDayCompletion', true);
     push('35_day2_not_auto_transition', 2, 'manual only', 'handleCompletedDayAfterSettlement -> prepareCampaignDayCompletion', true);
     push('36_day3_keep_content_complete_path', 3, 'yes', 'isCurrentDayLastImplementedDay -> completeImplementedCampaignContent', true);
-    push('37_day1_queue_unchanged', 1, '3', String(queueSize(day1)), queueSize(day1) === 3);
-    push('38_day2_queue_unchanged', 2, '4', String(queueSize(day2)), queueSize(day2) === 4);
-    push('39_day3_queue_unchanged', 3, '4', String(queueSize(day3)), queueSize(day3) === 4);
+    push('37_day1_queue_unchanged', 1, '4', String(queueSize(day1)), queueSize(day1) === 4);
+    push('38_day2_queue_unchanged', 2, '5', String(queueSize(day2)), queueSize(day2) === 5);
+    push('39_day3_queue_unchanged', 3, '5', String(queueSize(day3)), queueSize(day3) === 5);
     push('40_dynamic_valid_until_unchanged', 0, 'unchanged', 'not touched in Phase6B implementation', true);
     push('41_completed_round_not_reset', 0, 'preserved', 'no completedRoundCount reset in day completion flow', true);
     push('42_previous_signature_not_reset', 0, 'preserved', 'no previousRoundSignature reset in day completion flow', true);
@@ -9608,7 +11956,13 @@ export class EvidencePreviewController extends Component {
     push('44_checklist_reset_applied', 0, 'reset', 'clearDayTransitionTransientState -> resetChecklistState()', true);
     push('45_shutter_timer_cleanup', 0, 'cleared', 'resetInspectionRoundForNextSubject unschedules emergency timers', true);
     push('46_phone_1214_unchanged', 0, '1214', EvidencePreviewController.PURGE_PHONE_CODE, EvidencePreviewController.PURGE_PHONE_CODE === '1214');
-    push('47_shutter_10s_unchanged', 0, '10', String(EvidencePreviewController.MONSTER_SHUTTER_RESPONSE_WINDOW_SECONDS), EvidencePreviewController.MONSTER_SHUTTER_RESPONSE_WINDOW_SECONDS === 10);
+    push(
+      '47_day1_open_window_6s',
+      0,
+      '6',
+      String(getMonsterThreatTimingForDay(1).openWindowBreakSeconds),
+      getMonsterThreatTimingForDay(1).openWindowBreakSeconds === 6,
+    );
     push('48_shift_clock_math_unchanged', 0, '600s/09:00-17:00', `${day1.realDurationSeconds}s/${day1.shiftStartMinutes}-${day1.shiftEndMinutes}`, day1.realDurationSeconds === 600 && day1.shiftStartMinutes === 540 && day1.shiftEndMinutes === 1020);
     push('49_game_scene_not_mutated', 0, 'no scene edits', 'runtime overlay nodes only', true);
     push('50_no_new_png_required', 0, 'none', 'Graphics/Label/Button runtime shell only (DAYS 4–7 text)', true);
@@ -9764,7 +12118,7 @@ export class EvidencePreviewController extends Component {
       this.activeInspectionSubjectId = 'carter';
       this.employeeFilesController?.setActiveInspectionSubject(this.activeInspectionSubjectId);
       this.applyCampaignConfigurationToControllers();
-      this.refreshCampaignEvidenceAvailability();
+      this.refreshCampaignEvidenceAvailability('subject-load');
       return true;
     }
 
@@ -9823,13 +12177,379 @@ export class EvidencePreviewController extends Component {
     }
   }
 
-  private setManagedButtonsInteractable(interactable: boolean): void {
-    for (const button of this.managedButtons) {
+  private resolveRefreshReasonFromManagedButtons(reason: string): string {
+    if (reason.includes('intro-success')) return 'intro-complete-refresh';
+    if (reason.includes('preview-close')) return 'preview-close';
+    if (reason.includes('day-transition') || reason.includes('day-completion')) return 'day-transition';
+    if (reason.includes('decision-resolution')) return 'decision-resolution';
+    if (reason.includes('cleanup')) return 'cleanup';
+    if (reason.includes('failure-review') || reason.includes('revive')) return 'failure-review';
+    if (reason.includes('gameover') || reason.includes('game-over')) return 'game-over';
+    return 'campaign-evidence-refresh';
+  }
+
+  private setManagedButtonsInteractable(interactable: boolean, reason: string = 'unspecified'): void {
+    const managedButtons = this.getManagedButtonsForTrace();
+    for (const button of managedButtons) {
       button.interactable = interactable;
     }
-    if (interactable) {
-      this.refreshCampaignEvidenceAvailability();
+    const managedButtonsSetFalse = this.getManagedButtonsSetFalse();
+    this.logInteractionTrace('managed-buttons', {
+      value: interactable,
+      reason,
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+      total: managedButtons.length,
+      falseCount: managedButtonsSetFalse.length,
+      falseButtons: managedButtonsSetFalse.join('|'),
+    });
+    if (!interactable) {
+      this.logInteractionStateSnapshot(`managed-buttons-false:${reason}`);
     }
+    this.logDay4DocumentRuntimeState(
+      `managed-buttons-after:${reason}:${interactable ? 'true' : 'false'}`,
+      'setManagedButtonsInteractable',
+    );
+    if (interactable) {
+      this.refreshCampaignEvidenceAvailability(this.resolveRefreshReasonFromManagedButtons(reason));
+    }
+  }
+
+  private setInspectionDecisionResolutionInProgress(value: boolean, reason: string): void {
+    this.inspectionDecisionResolutionInProgress = value;
+    this.logInteractionTrace('inspection-resolution', {
+      value,
+      reason,
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+    });
+    this.logInteractionStateSnapshot(`inspection-resolution:${reason}:${value ? 'true' : 'false'}`);
+  }
+
+  private setTelephoneEntryEnabledForInteractionTrace(value: boolean, reason: string): void {
+    this.lastKnownTelephoneEntryEnabled = value;
+    this.logInteractionTrace('telephone-entry', {
+      value,
+      reason,
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+    });
+    this.telephoneController?.setTelephoneEntryEnabled(value);
+  }
+
+  private setShutterInteractionEnabledForInteractionTrace(value: boolean, reason: string): void {
+    this.lastKnownShutterInteractionEnabled = value;
+    this.logInteractionTrace('shutter-interaction', {
+      value,
+      reason,
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+    });
+    this.shutterController?.setInteractionEnabled(value);
+  }
+
+  private logMonsterThreatTiming(message: string): void {
+    const subject = this.getActiveSubjectKeyForInteractionTrace() ?? 'unknown';
+    console.info(
+      `[MonsterThreatTiming] ${message} subject=${subject} generation=${this.monsterThreatGeneration}`,
+    );
+  }
+
+  private logInteractionTrace(event: string, payload: Record<string, string | number | boolean | null>): void {
+    const segments: string[] = [`[InteractionTrace] ${event}`];
+    for (const [key, rawValue] of Object.entries(payload)) {
+      if (Array.isArray(rawValue)) {
+        continue;
+      }
+      segments.push(`${key}=${String(rawValue)}`);
+    }
+    console.info(segments.join(' '));
+  }
+
+  private getActiveCampaignDayIndex(): number {
+    return this.activeDayConfig?.dayIndex ?? campaignState.getCurrentDayIndex();
+  }
+
+  private isDay4VisitorDocumentTraceContext(): boolean {
+    return (
+      this.getActiveCampaignDayIndex() === 4 &&
+      this.currentInspectionSubject?.subjectKind === 'visitor'
+    );
+  }
+
+  private resolveDay4DocumentControl(
+    visual: Node | null,
+    hit: Node | null,
+    button: Button | null,
+  ): Day4DocumentControl | null {
+    if (
+      visual === this.employeeCardVisual ||
+      hit === this.employeeCardHit ||
+      button === this.employeeCardHitButton
+    ) {
+      return 'employee-card';
+    }
+    if (
+      visual === this.applicationFormVisual ||
+      hit === this.applicationFormHit ||
+      button === this.applicationFormHitButton
+    ) {
+      return 'application-form';
+    }
+    return null;
+  }
+
+  private getDay4DocumentStateSnapshot(): Day4DocumentStateSnapshot {
+    return {
+      employeeCardVisualActive: this.employeeCardVisual?.active ?? false,
+      employeeCardHitActive: this.employeeCardHit?.active ?? false,
+      employeeCardButtonInteractable: this.employeeCardHitButton?.interactable ?? false,
+      applicationFormVisualActive: this.applicationFormVisual?.active ?? false,
+      applicationFormHitActive: this.applicationFormHit?.active ?? false,
+      applicationFormButtonInteractable: this.applicationFormHitButton?.interactable ?? false,
+    };
+  }
+
+  private logDay4DocumentDisabledTransition(
+    control: Day4DocumentControl,
+    field: string,
+    methodName: string,
+    reason: string,
+  ): void {
+    if (!this.isDay4VisitorDocumentTraceContext()) {
+      return;
+    }
+    const visitorKey =
+      this.currentInspectionSubject?.subjectKind === 'visitor'
+        ? this.currentInspectionSubject.visitorKey
+        : 'none';
+    const token = this.getCurrentInspectionSubjectToken() ?? 'none';
+    const onceKey = `document-disabled:${control}:${field}:${methodName}:${reason}:${this.decisionResolutionToken}:${token}`;
+    if (this.day4DocumentDisabledOnce.has(onceKey)) {
+      return;
+    }
+    this.day4DocumentDisabledOnce.add(onceKey);
+    console.info(
+      `[Day4DocumentTrace] document-disabled control=${control} field=${field} method=${methodName} reason=${reason} visitor=${visitorKey} token=${token}`,
+    );
+  }
+
+  private detectAndLogDay4DocumentDisableTransitions(
+    current: Day4DocumentStateSnapshot,
+    methodName: string,
+    reason: string,
+  ): void {
+    const previous = this.lastDay4DocumentStateSnapshot;
+    if (!previous || !this.isDay4VisitorDocumentTraceContext()) {
+      this.lastDay4DocumentStateSnapshot = current;
+      return;
+    }
+    if (previous.employeeCardVisualActive && !current.employeeCardVisualActive) {
+      this.logDay4DocumentDisabledTransition(
+        'employee-card',
+        'employeeCardVisual.active',
+        methodName,
+        reason,
+      );
+    }
+    if (previous.employeeCardHitActive && !current.employeeCardHitActive) {
+      this.logDay4DocumentDisabledTransition('employee-card', 'employeeCardHit.active', methodName, reason);
+    }
+    if (previous.employeeCardButtonInteractable && !current.employeeCardButtonInteractable) {
+      this.logDay4DocumentDisabledTransition(
+        'employee-card',
+        'employeeCardHitButton.interactable',
+        methodName,
+        reason,
+      );
+    }
+    if (previous.applicationFormVisualActive && !current.applicationFormVisualActive) {
+      this.logDay4DocumentDisabledTransition(
+        'application-form',
+        'applicationFormVisual.active',
+        methodName,
+        reason,
+      );
+    }
+    if (previous.applicationFormHitActive && !current.applicationFormHitActive) {
+      this.logDay4DocumentDisabledTransition(
+        'application-form',
+        'applicationFormHit.active',
+        methodName,
+        reason,
+      );
+    }
+    if (previous.applicationFormButtonInteractable && !current.applicationFormButtonInteractable) {
+      this.logDay4DocumentDisabledTransition(
+        'application-form',
+        'applicationFormHitButton.interactable',
+        methodName,
+        reason,
+      );
+    }
+    this.lastDay4DocumentStateSnapshot = current;
+  }
+
+  private logDay4DocumentClickReceived(control: Day4DocumentControl): void {
+    if (!this.isDay4VisitorDocumentTraceContext()) {
+      return;
+    }
+    const token = this.getCurrentInspectionSubjectToken() ?? 'none';
+    const onceKey = `click-received:${control}:${this.decisionResolutionToken}:${token}`;
+    if (this.day4DocumentTraceReasonOnce.has(onceKey)) {
+      return;
+    }
+    this.day4DocumentTraceReasonOnce.add(onceKey);
+    console.info(`[Day4DocumentTrace] click-received control=${control}`);
+    this.logDay4DocumentRuntimeState(`click-received:${control}`, 'click');
+  }
+
+  private logDay4DocumentClickBlocked(control: Day4DocumentControl, reason: string): void {
+    if (!this.isDay4VisitorDocumentTraceContext()) {
+      return;
+    }
+    const token = this.getCurrentInspectionSubjectToken() ?? 'none';
+    const onceKey = `click-blocked:${control}:${reason}:${this.decisionResolutionToken}:${token}`;
+    if (this.day4DocumentTraceReasonOnce.has(onceKey)) {
+      return;
+    }
+    this.day4DocumentTraceReasonOnce.add(onceKey);
+    const visitorKey =
+      this.currentInspectionSubject?.subjectKind === 'visitor'
+        ? this.currentInspectionSubject.visitorKey
+        : 'none';
+    console.info(
+      `[Day4DocumentTrace] click-blocked control=${control} reason=${reason} visitor=${visitorKey} token=${token}`,
+    );
+    this.logDay4DocumentRuntimeState(`click-blocked:${control}:${reason}`, 'click');
+  }
+
+  private logDay4DocumentRuntimeState(reason: string, methodName: string = 'unspecified'): void {
+    if (!this.isDay4VisitorDocumentTraceContext()) {
+      return;
+    }
+    const token = this.getCurrentInspectionSubjectToken() ?? 'none';
+    const visitorKey =
+      this.currentInspectionSubject?.subjectKind === 'visitor'
+        ? this.currentInspectionSubject.visitorKey
+        : 'none';
+    const onceKey = `state:${reason}:${this.decisionResolutionToken}:${token}`;
+    if (this.day4DocumentTraceReasonOnce.has(onceKey)) {
+      return;
+    }
+    this.day4DocumentTraceReasonOnce.add(onceKey);
+    const state = this.getDay4DocumentStateSnapshot();
+    console.info(
+      `[Day4DocumentTrace] state reason=${reason} method=${methodName} visitorKey=${visitorKey} day=4 cursor=${this.activeDay4VisitorCursor} token=${token} generation=${this.decisionResolutionToken} subjectPresent=${this.currentInspectionSubject !== null} subjectKind=${this.currentInspectionSubject?.subjectKind ?? 'null'} employeeCardVisualActive=${state.employeeCardVisualActive} employeeCardHitActive=${state.employeeCardHitActive} employeeCardHitButtonInteractable=${state.employeeCardButtonInteractable} deskEmployeeCardSpriteFramePresent=${Boolean(this.deskEmployeeCardSprite?.spriteFrame)} applicationFormVisualActive=${state.applicationFormVisualActive} applicationFormHitActive=${state.applicationFormHitActive} applicationFormHitButtonInteractable=${state.applicationFormButtonInteractable} deskApplicationFormSpriteFramePresent=${Boolean(this.deskApplicationFormSprite?.spriteFrame)} inspectionDecisionResolutionInProgress=${this.inspectionDecisionResolutionInProgress} campaignDayTransitionInProgress=${this.campaignDayTransitionInProgress} gameOverActive=${this.isGameOverStateActive()} failureReviewActive=${this.failureReviewActive} controllerActiveInHierarchy=${this.node?.activeInHierarchy ?? false} controllerEnabled=${this.enabled}`,
+    );
+    this.detectAndLogDay4DocumentDisableTransitions(state, methodName, reason);
+  }
+
+  private getActiveSubjectKeyForInteractionTrace(): string | null {
+    const subject = this.currentInspectionSubject;
+    if (subject?.subjectKind === 'visitor') {
+      return subject.visitorKey;
+    }
+    if (subject?.subjectKind === 'employee') {
+      return subject.round.employeeKey;
+    }
+    return this.currentRound?.employeeKey ?? null;
+  }
+
+  private getActiveEmployeeKeyForInteractionTrace(): string | null {
+    const subject = this.currentInspectionSubject;
+    if (subject?.subjectKind === 'employee') {
+      return subject.round.employeeKey;
+    }
+    return this.currentRound?.employeeKey ?? null;
+  }
+
+  private getManagedButtonsSetFalse(): string[] {
+    return this.getManagedButtonsForTrace()
+      .filter((button) => button?.node?.isValid && !button.interactable)
+      .map((button) => button.node.name);
+  }
+
+  private getManagedButtonsForTrace(): Button[] {
+    if (Array.isArray(this.managedButtons)) {
+      return this.managedButtons;
+    }
+    this.logInteractionTrace('managed-buttons-invalid', {
+      reason: 'managed-buttons-not-array',
+      actualType: typeof this.managedButtons,
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+    });
+    return [];
+  }
+
+  private shouldEmitDetailedInteractionSnapshot(reason: string): boolean {
+    const subjectKey = this.getActiveSubjectKeyForInteractionTrace();
+    if (!EvidencePreviewController.INTERACTION_RUNTIME_DIAGNOSTIC_ENABLED && subjectKey !== 'jake') {
+      return false;
+    }
+    const dedupeKey = `${subjectKey ?? 'none'}:${reason}`;
+    if (this.interactionSnapshotReasonOnce.has(dedupeKey)) {
+      return false;
+    }
+    this.interactionSnapshotReasonOnce.add(dedupeKey);
+    return true;
+  }
+
+  private logInteractionStateSnapshot(reason: string): void {
+    if (!this.shouldEmitDetailedInteractionSnapshot(reason)) {
+      return;
+    }
+    const helpPanelOpen = this.guidancePanelActive && this.guidancePanelMode === 'help';
+    const hintPanelOpen = this.guidancePanelActive && this.guidancePanelMode === 'hint';
+    const settingsOverlay =
+      this.node.scene?.getChildByName('Canvas')?.getChildByName('SettingsOverlay') ?? null;
+    const settingsPanelOpen = settingsOverlay?.isValid ? settingsOverlay.active : false;
+    const modalOpenEquivalent =
+      this.previewOpen ||
+      this.guidancePanelActive ||
+      this.failureReviewActive ||
+      (this.carterGameOverPanelRuntime?.active ?? false);
+    const managedButtonsSetFalse = this.getManagedButtonsSetFalse();
+    this.logInteractionTrace('state-snapshot', {
+      reason,
+      day: this.getActiveCampaignDayIndex(),
+      subjectKey: this.getActiveSubjectKeyForInteractionTrace(),
+      employeeKey: this.getActiveEmployeeKeyForInteractionTrace(),
+      currentRoundId: this.currentRound?.roundId ?? null,
+      generation: this.decisionResolutionToken,
+      roundGeneration: this.visitorVisualLoadGeneration,
+      subjectGeneration: this.mainInspectionWindowBackgroundLoadGeneration,
+      inspectionDecisionResolutionInProgress: this.inspectionDecisionResolutionInProgress,
+      campaignDayTransitionInProgress: this.campaignDayTransitionInProgress,
+      campaignDayCompletionPending: this.campaignDayCompletionPending,
+      gameOverActive: this.isGameOverStateActive(),
+      failureReviewActive: this.failureReviewActive,
+      monsterThreatActive: this.threatSequenceActive,
+      previewOpen: this.previewOpen,
+      helpPanelOpen,
+      hintPanelOpen,
+      settingsPanelOpen,
+      modalOpen: modalOpenEquivalent,
+      controllerEnabled: this.enabled,
+      nodeActiveInHierarchy: this.node?.activeInHierarchy ?? false,
+      employeeCardInteractable: this.employeeCardHitButton?.interactable ?? false,
+      applicationInteractable: this.applicationFormHitButton?.interactable ?? false,
+      checklistInteractable: this.screeningChecklistHitButton?.interactable ?? false,
+      allowInteractable: this.allowHitButton?.interactable ?? false,
+      denyInteractable: this.denyHitButton?.interactable ?? false,
+      helpInteractable: this.guidanceHelpButton?.interactable ?? false,
+      hintInteractable: this.guidanceHintButton?.interactable ?? false,
+      telephoneEntryEnabled: this.lastKnownTelephoneEntryEnabled,
+      shutterInteractionEnabled: this.lastKnownShutterInteractionEnabled,
+      managedButtonCount: this.getManagedButtonsForTrace().length,
+      managedButtonsFalseCount: managedButtonsSetFalse.length,
+      managedButtonsFalseNames: managedButtonsSetFalse.join('|'),
+    });
   }
 
   private drawScrim(alpha: number): void {
@@ -9862,6 +12582,31 @@ export class EvidencePreviewController extends Component {
       root.getChildByName('EthanApplicationFormFakeSource')?.getComponent(Sprite)?.spriteFrame ?? null;
   }
 
+  private preloadDay0EndingPlayerIdentityFrames(): void {
+    if (this.day0EndingPlayerDisguisedFrame || this.day0EndingPlayerDisguisedFrameLoading) {
+      return;
+    }
+    this.day0EndingPlayerDisguisedFrameLoading = true;
+    assetManager.loadAny(
+      EvidencePreviewController.DAY0_ENDING_PLAYER_DISGUISED_SPRITEFRAME_UUID,
+      (error, asset) => {
+        this.day0EndingPlayerDisguisedFrameLoading = false;
+        if (error) {
+          console.warn(
+            '[EvidencePreviewController] Failed to load Day0 ending player disguised sprite frame.',
+            error,
+          );
+          return;
+        }
+        const frame = asset as SpriteFrame | null;
+        if (!frame) {
+          return;
+        }
+        this.day0EndingPlayerDisguisedFrame = frame;
+      },
+    );
+  }
+
   private getActiveInspectionSubjectDefinition(): InspectionSubjectDefinition | null {
     const activeSubject = this.currentInspectionSubject;
     if (!activeSubject) {
@@ -9888,10 +12633,37 @@ export class EvidencePreviewController extends Component {
       if (!characterDisguisedFrame || !employeeFilePortraitFrame) {
         return null;
       }
-      const fallbackEmployeeCardFrame =
-        this.defaultDeskEmployeeCardFrame ?? this.activeSubjectEmployeeCardDetailFrame ?? characterDisguisedFrame;
-      const fallbackApplicationFrame =
-        this.defaultDeskApplicationFormFrame ?? this.activeSubjectApplicationDetailFrame ?? characterDisguisedFrame;
+      const visitorDocumentFrames = VISITOR_DOCUMENT_FRAME_UUIDS[activeSubject.visitorKey];
+      if (!visitorDocumentFrames) {
+        console.error('[EvidencePreviewController] Missing visitor document UUID mapping.', {
+          roundId: activeSubject.roundId,
+          visitorKey: activeSubject.visitorKey,
+        });
+        return null;
+      }
+      const visitorEmployeeCardFrame =
+        this.roundSpriteFrameCache.get(visitorDocumentFrames.employeeCard) ?? null;
+      const visitorApplicationFrame =
+        this.roundSpriteFrameCache.get(visitorDocumentFrames.applicationForm) ?? null;
+      if (!visitorEmployeeCardFrame || !visitorApplicationFrame) {
+        console.error('[EvidencePreviewController] Visitor document frame preload missing.', {
+          roundId: activeSubject.roundId,
+          visitorKey: activeSubject.visitorKey,
+          employeeCardUuid: visitorDocumentFrames.employeeCard,
+          applicationFormUuid: visitorDocumentFrames.applicationForm,
+          hasEmployeeCardFrame: Boolean(visitorEmployeeCardFrame),
+          hasApplicationFormFrame: Boolean(visitorApplicationFrame),
+        });
+        return null;
+      }
+      const hasDepartmentMismatch = activeSubject.mismatchKinds.includes('department');
+      const hasPurposeMismatch = activeSubject.mismatchKinds.includes('purpose');
+      const applicationDepartment = hasDepartmentMismatch
+        ? activeSubject.claim.claimedDepartmentKey
+        : (officialAppointment?.targetDepartmentKey ?? activeSubject.claim.claimedDepartmentKey);
+      const applicationPurpose = hasPurposeMismatch
+        ? activeSubject.claim.claimedPurposeKey
+        : (officialAppointment?.purposeKey ?? activeSubject.claim.claimedPurposeKey);
       return {
         id: 'carter',
         entityKind: activeSubject.caseKind === 'disguised-monster-visitor' ? 'monster' : 'human',
@@ -9902,11 +12674,11 @@ export class EvidencePreviewController extends Component {
         employeeFilePortraitFrame,
         monsterPortraitFrame,
         monsterFullbodyFrame,
-        employeeCardFrame: fallbackEmployeeCardFrame,
-        applicationFormFrame: fallbackApplicationFrame,
+        employeeCardFrame: visitorEmployeeCardFrame,
+        applicationFormFrame: visitorApplicationFrame,
         truth: {
           employeeCardPass: true,
-          applicationPass: true,
+          applicationPass: !hasDepartmentMismatch && !hasPurposeMismatch,
           appearancePass: activeSubject.caseKind === 'valid-visitor',
         },
         documentPresentation: {
@@ -9916,14 +12688,15 @@ export class EvidencePreviewController extends Component {
             position: 'VISITOR',
             validUntilTitle: 'Appointment',
             validUntil: activeSubject.inspectionDate,
+            sealState: 'VALID',
           },
           applicationForm: {
             idNumber: activeSubject.appointmentId,
             displayName: visitorProfile.displayName,
             position: 'Visitor',
-            department: officialAppointment?.targetDepartmentKey ?? activeSubject.claim.claimedDepartmentKey,
+            department: applicationDepartment,
             validUntil: activeSubject.inspectionDate,
-            reasonForEntry: officialAppointment?.purposeKey ?? activeSubject.claim.claimedPurposeKey,
+            reasonForEntry: applicationPurpose,
           },
         },
       };
@@ -10054,6 +12827,7 @@ export class EvidencePreviewController extends Component {
           position: profile.position,
           validUntilTitle: 'Valid Until',
           validUntil: this.currentRound.card.validUntil,
+          sealState: this.currentRound.card.sealState === 'MISSING' ? 'MISSING' : 'VALID',
         },
         applicationForm: {
           idNumber: this.currentRound.application.employeeId,
@@ -10068,6 +12842,13 @@ export class EvidencePreviewController extends Component {
   }
 
   private loadInspectionSubject(subjectId: InspectionSubjectId): boolean {
+    this.logInteractionTrace('subject-load-start', {
+      day: this.getActiveCampaignDayIndex(),
+      subject: subjectId,
+      generation: this.decisionResolutionToken,
+    });
+    this.logInteractionStateSnapshot('subject-load-start');
+    this.logDay4DocumentRuntimeState('subject-load-start', 'loadInspectionSubject');
     if (this.currentInspectionSubject?.subjectKind === 'visitor') {
       const visitorRound = this.currentInspectionSubject;
       const def = this.getActiveInspectionSubjectDefinition();
@@ -10079,6 +12860,12 @@ export class EvidencePreviewController extends Component {
       if (this.carterCharacter?.isValid) {
         this.carterCharacter.active = true;
       }
+      this.logInteractionTrace('subject-sprite-visible', {
+        day: this.getActiveCampaignDayIndex(),
+        subject: visitorRound.visitorKey,
+        generation: this.decisionResolutionToken,
+      });
+      this.logInteractionStateSnapshot('subject-sprite-visible');
       const activeMonsterPortrait = this.getActiveMonsterPortraitFrame();
       if (this.carterMonsterPortraitSprite && activeMonsterPortrait) {
         this.carterMonsterPortraitSprite.spriteFrame = activeMonsterPortrait;
@@ -10088,10 +12875,13 @@ export class EvidencePreviewController extends Component {
         this.commitActiveMonsterFullbodyPresentation('load-subject-visitor');
       }
       this.setActiveVisitorKeyForDepartmentPhone(visitorRound.visitorKey);
+      this.applySubjectDetailDocumentFrames(def);
+      this.syncActiveDocumentPresentation();
       this.committedVisitorVisualRoundId = visitorRound.roundId;
       this.visitorVisualPresentationRoundId = null;
       this.applyCampaignConfigurationToControllers();
-      this.refreshCampaignEvidenceAvailability();
+      this.refreshCampaignEvidenceAvailability('subject-load');
+      this.logDay4DocumentRuntimeState('visitor-document-spriteframe-ready', 'loadInspectionSubject');
       return true;
     }
 
@@ -10112,20 +12902,13 @@ export class EvidencePreviewController extends Component {
     if (this.carterCharacter?.isValid) {
       this.carterCharacter.active = true;
     }
-    this.activeSubjectEmployeeCardDetailFrame = def.employeeCardFrame;
-    this.activeSubjectApplicationDetailFrame = def.applicationFormFrame;
-    if (this.employeeCardDetailVisual?.isValid) {
-      const sprite = this.employeeCardDetailVisual.getComponent(Sprite);
-      if (sprite && this.activeSubjectEmployeeCardDetailFrame) {
-        sprite.spriteFrame = this.activeSubjectEmployeeCardDetailFrame;
-      }
-    }
-    if (this.applicationFormDetailVisual?.isValid) {
-      const sprite = this.applicationFormDetailVisual.getComponent(Sprite);
-      if (sprite && this.activeSubjectApplicationDetailFrame) {
-        sprite.spriteFrame = this.activeSubjectApplicationDetailFrame;
-      }
-    }
+    this.logInteractionTrace('subject-sprite-visible', {
+      day: this.getActiveCampaignDayIndex(),
+      subject: subjectId,
+      generation: this.decisionResolutionToken,
+    });
+    this.logInteractionStateSnapshot('subject-sprite-visible');
+    this.applySubjectDetailDocumentFrames(def);
     this.syncActiveDocumentPresentation();
     this.logRoundBootstrap('documents synced');
     if (!this.restoreStaticDeskEvidenceFrames()) {
@@ -10141,8 +12924,24 @@ export class EvidencePreviewController extends Component {
     }
     this.employeeFilesController?.setActiveInspectionSubject(subjectId);
     this.applyCampaignConfigurationToControllers();
-    this.refreshCampaignEvidenceAvailability();
+    this.refreshCampaignEvidenceAvailability('subject-load');
+    this.logDay4DocumentRuntimeState('visitor-document-spriteframe-ready', 'loadInspectionSubject');
     return true;
+  }
+
+  private applySubjectDetailDocumentFrames(definition: InspectionSubjectDefinition): void {
+    this.activeSubjectEmployeeCardDetailFrame = definition.employeeCardFrame;
+    this.activeSubjectApplicationDetailFrame = definition.applicationFormFrame;
+
+    const employeeCardDetailSprite = this.employeeCardDetailVisual?.getComponent(Sprite) ?? null;
+    if (employeeCardDetailSprite) {
+      employeeCardDetailSprite.spriteFrame = definition.employeeCardFrame;
+    }
+
+    const applicationFormDetailSprite = this.applicationFormDetailVisual?.getComponent(Sprite) ?? null;
+    if (applicationFormDetailSprite) {
+      applicationFormDetailSprite.spriteFrame = definition.applicationFormFrame;
+    }
   }
 
   private setCarterDocumentLayersActive(active: boolean): void {
@@ -10170,6 +12969,9 @@ export class EvidencePreviewController extends Component {
     if (this.employeeCardValidUntilValueLabel) {
       this.employeeCardValidUntilValueLabel.string = presentation.validUntil;
     }
+    if (this.employeeCardSecurityLogoSprite?.node?.isValid) {
+      this.employeeCardSecurityLogoSprite.node.active = presentation.sealState !== 'MISSING';
+    }
   }
 
   private applyApplicationFormPresentation(presentation: ApplicationFormDocumentPresentation): void {
@@ -10191,6 +12993,160 @@ export class EvidencePreviewController extends Component {
     if (this.applicationReasonForEntryValueLabel) {
       this.applicationReasonForEntryValueLabel.string = presentation.reasonForEntry;
     }
+  }
+
+  private configureApplicationReasonForEntryTypography(): void {
+    const label = this.applicationReasonForEntryValueLabel;
+    if (!label) {
+      return;
+    }
+    const valueYOffset = -10;
+    label.fontSize = 22;
+    label.lineHeight = 26;
+    label.overflow = Overflow.CLAMP;
+    label.enableWrapText = true;
+    label.horizontalAlign = Label.HorizontalAlign.LEFT;
+    label.verticalAlign = Label.VerticalAlign.TOP;
+    const currentPosition = label.node.getPosition();
+    label.node.setPosition(
+      currentPosition.x,
+      currentPosition.y + valueYOffset,
+      currentPosition.z,
+    );
+
+    const transform = label.node.getComponent(UITransform);
+    if (!transform) {
+      return;
+    }
+    const width = transform.contentSize.width;
+    const height = Math.max(52, transform.contentSize.height);
+    transform.setContentSize(width, height);
+  }
+
+  private redrawVisitorDocumentPhotoSlotBackground(
+    backgroundNode: Node,
+    layout: VisitorDocumentPhotoSlotLayout,
+  ): void {
+    const graphics = backgroundNode.getComponent(Graphics) ?? backgroundNode.addComponent(Graphics);
+    graphics.clear();
+    graphics.fillColor = new Color(layout.backgroundGray, layout.backgroundGray, layout.backgroundGray, 255);
+    graphics.rect(-layout.width / 2, -layout.height / 2, layout.width, layout.height);
+    graphics.fill();
+  }
+
+  private ensureVisitorDocumentPhotoSlot(
+    parent: Node | null,
+    layout: VisitorDocumentPhotoSlotLayout,
+  ): VisitorDocumentPhotoSlotRuntime | null {
+    if (!parent?.isValid) {
+      return null;
+    }
+    let node = parent.getChildByName(layout.nodeName);
+    if (!node) {
+      node = new Node(layout.nodeName);
+      parent.addChild(node);
+    }
+    node.setPosition(layout.x, layout.y, 0);
+    node.setScale(1, 1, 1);
+    node.setSiblingIndex(0);
+    const transform = node.getComponent(UITransform) ?? node.addComponent(UITransform);
+    transform.setAnchorPoint(0.5, 0.5);
+    transform.setContentSize(layout.width, layout.height);
+    const mask = node.getComponent(Mask) ?? node.addComponent(Mask);
+    mask.type = Mask.Type.RECT;
+
+    let backgroundNode = node.getChildByName('VisitorDocumentPhotoBackground');
+    if (!backgroundNode) {
+      backgroundNode = new Node('VisitorDocumentPhotoBackground');
+      node.addChild(backgroundNode);
+    }
+    backgroundNode.setPosition(0, 0, 0);
+    backgroundNode.setScale(1, 1, 1);
+    const backgroundTransform = backgroundNode.getComponent(UITransform) ?? backgroundNode.addComponent(UITransform);
+    backgroundTransform.setAnchorPoint(0.5, 0.5);
+    backgroundTransform.setContentSize(layout.width, layout.height);
+    this.redrawVisitorDocumentPhotoSlotBackground(backgroundNode, layout);
+
+    let portraitNode = node.getChildByName('VisitorDocumentPhotoPortrait');
+    if (!portraitNode) {
+      portraitNode = new Node('VisitorDocumentPhotoPortrait');
+      node.addChild(portraitNode);
+    }
+    portraitNode.setPosition(0, 0, 0);
+    portraitNode.setScale(1, 1, 1);
+    const portraitTransform = portraitNode.getComponent(UITransform) ?? portraitNode.addComponent(UITransform);
+    portraitTransform.setAnchorPoint(0.5, 0.5);
+    portraitTransform.setContentSize(layout.width, layout.height);
+    const portraitSprite = portraitNode.getComponent(Sprite) ?? portraitNode.addComponent(Sprite);
+    portraitSprite.sizeMode = Sprite.SizeMode.CUSTOM;
+    portraitSprite.grayscale = true;
+    portraitSprite.color = Color.WHITE;
+    node.active = false;
+    return {
+      root: node,
+      mask,
+      portraitSprite,
+      portraitTransform,
+      layout,
+    };
+  }
+
+  private ensureVisitorDocumentPhotoRuntime(): void {
+    this.visitorEmployeeCardPhotoSlot = this.ensureVisitorDocumentPhotoSlot(
+      this.carterEmployeeCardDynamicLayer,
+      EvidencePreviewController.VISITOR_DOCUMENT_PHOTO_SLOT_LAYOUT['employee-card'],
+    );
+    this.visitorApplicationFormPhotoSlot = this.ensureVisitorDocumentPhotoSlot(
+      this.carterApplicationDynamicLayer,
+      EvidencePreviewController.VISITOR_DOCUMENT_PHOTO_SLOT_LAYOUT['application-form'],
+    );
+  }
+
+  private applyVisitorDocumentPhotoContain(
+    portraitTransform: UITransform,
+    frame: SpriteFrame,
+    maxWidth: number,
+    maxHeight: number,
+  ): void {
+    const originalSize = frame.originalSize;
+    const sourceWidth = Math.max(1, originalSize?.width ?? maxWidth);
+    const sourceHeight = Math.max(1, originalSize?.height ?? maxHeight);
+    const containScale = Math.min(maxWidth / sourceWidth, maxHeight / sourceHeight);
+    if (!Number.isFinite(containScale) || containScale <= 0) {
+      portraitTransform.setContentSize(maxWidth, maxHeight);
+      return;
+    }
+    portraitTransform.setContentSize(sourceWidth * containScale, sourceHeight * containScale);
+  }
+
+  private applyVisitorDocumentPhotoSlot(
+    slot: VisitorDocumentPhotoSlotRuntime | null,
+    frame: SpriteFrame | null,
+  ): void {
+    if (!slot || !slot.root?.isValid) {
+      return;
+    }
+    slot.portraitSprite.spriteFrame = frame;
+    if (!frame) {
+      slot.root.active = false;
+      return;
+    }
+    slot.portraitSprite.grayscale = true;
+    this.applyVisitorDocumentPhotoContain(
+      slot.portraitTransform,
+      frame,
+      slot.layout.width,
+      slot.layout.height,
+    );
+    slot.root.active = true;
+  }
+
+  private syncVisitorDocumentPhotoSlots(definition: InspectionSubjectDefinition | null): void {
+    const activeSubject = this.currentInspectionSubject;
+    const visitorPortraitFrame =
+      activeSubject?.subjectKind === 'visitor' ? definition?.employeeFilePortraitFrame ?? null : null;
+    this.applyVisitorDocumentPhotoSlot(this.visitorEmployeeCardPhotoSlot, visitorPortraitFrame);
+    this.applyVisitorDocumentPhotoSlot(this.visitorApplicationFormPhotoSlot, visitorPortraitFrame);
   }
 
   private syncActiveDocumentPresentation(): void {
@@ -10320,10 +13276,6 @@ export class EvidencePreviewController extends Component {
     if (dayConfig.dayIndex < HIGHEST_IMPLEMENTED_CAMPAIGN_DAY) {
       unlockDay(dayConfig.dayIndex + 1);
     }
-    if (this.isCurrentDayLastImplementedDay()) {
-      this.completeImplementedCampaignContent();
-      return;
-    }
     this.prepareCampaignDayCompletion();
   }
 
@@ -10345,33 +13297,35 @@ export class EvidencePreviewController extends Component {
       this.campaignImplementedContentComplete ||
       this.campaignDayCompletionPending ||
       this.campaignDayContinueRequested ||
-      this.isCurrentDayLastImplementedDay() ||
       this.isGameOverStateActive()
     ) {
       return;
     }
 
-    const nextDayIndex = (dayConfig.dayIndex + 1) as CampaignDayIndex;
-    const nextDayConfig = getDayLevelConfig(nextDayIndex);
+    const isFinalDay = this.isCurrentDayLastImplementedDay();
+    const nextDayConfig = !isFinalDay
+      ? getDayLevelConfig((dayConfig.dayIndex + 1) as CampaignDayIndex)
+      : null;
     const completedEncounters = totalEncounters;
 
     this.campaignDayCompletionPending = true;
     this.campaignDayContinueRequested = false;
     this.shiftClockController?.pause();
     this.clearDayTransitionTransientState();
-    this.setManagedButtonsInteractable(false);
-    this.lockAllEncounterInput();
+    this.setManagedButtonsInteractable(false, 'day-completion-lock');
+    this.lockAllEncounterInput('day-completion-lock');
 
+    const currentDayDecisionErrorStats = this.computeCurrentDayDecisionErrorStats();
     const overlayData: DayCompletionOverlayData = {
       dayIndex: dayConfig.dayIndex,
       date: dayConfig.date,
       completedEncounters,
       totalEncounters,
-      wrongAllowCount: campaignState.getDailyDecisionErrorStats().wrongAllowCount,
-      wrongDenyCount: campaignState.getDailyDecisionErrorStats().wrongDenyCount,
+      wrongAllowCount: currentDayDecisionErrorStats.wrongAllowCount,
+      wrongDenyCount: currentDayDecisionErrorStats.wrongDenyCount,
       mode: 'next-day',
-      nextDayIndex: nextDayConfig.dayIndex,
-      nextDate: nextDayConfig.date,
+      nextDayIndex: nextDayConfig?.dayIndex ?? dayConfig.dayIndex,
+      nextDate: nextDayConfig?.date ?? dayConfig.date,
     };
     this.dayCompletionOverlayController?.show(overlayData);
     console.info('[Campaign] day completion overlay shown', {
@@ -10381,8 +13335,34 @@ export class EvidencePreviewController extends Component {
       totalEncounters: overlayData.totalEncounters,
       wrongAllowCount: overlayData.wrongAllowCount,
       wrongDenyCount: overlayData.wrongDenyCount,
+      finalDay: isFinalDay,
       nextDayIndex: overlayData.nextDayIndex ?? null,
       nextDate: overlayData.nextDate ?? null,
+    });
+  }
+
+  private recordDayStartDecisionErrorBaseline(reason: string): void {
+    const stats = campaignState.getDailyDecisionErrorStats();
+    this.dayStartWrongAllowCount = stats.wrongAllowCount;
+    this.dayStartWrongDenyCount = stats.wrongDenyCount;
+    console.info('[Campaign] day start error baseline recorded', {
+      reason,
+      dayIndex: this.activeDayConfig?.dayIndex ?? campaignState.getCurrentDayIndex(),
+      wrongAllowCount: this.dayStartWrongAllowCount,
+      wrongDenyCount: this.dayStartWrongDenyCount,
+    });
+  }
+
+  private computeCurrentDayDecisionErrorStats(): Readonly<{
+    wrongAllowCount: number;
+    wrongDenyCount: number;
+  }> {
+    const currentStats = campaignState.getDailyDecisionErrorStats();
+    const wrongAllowCount = Math.max(0, currentStats.wrongAllowCount - this.dayStartWrongAllowCount);
+    const wrongDenyCount = Math.max(0, currentStats.wrongDenyCount - this.dayStartWrongDenyCount);
+    return Object.freeze({
+      wrongAllowCount,
+      wrongDenyCount,
     });
   }
 
@@ -10396,11 +13376,11 @@ export class EvidencePreviewController extends Component {
     if (
       this.isDestroying ||
       this.isGameOverStateActive() ||
-      this.campaignImplementedContentComplete ||
-      this.isCurrentDayLastImplementedDay()
+      this.campaignImplementedContentComplete
     ) {
       return;
     }
+    const isFinalDay = this.isCurrentDayLastImplementedDay();
     const fromDay = this.activeDayConfig?.dayIndex ?? campaignState.getCurrentDayIndex();
     const toDay = Math.min(fromDay + 1, HIGHEST_IMPLEMENTED_CAMPAIGN_DAY);
 
@@ -10416,10 +13396,18 @@ export class EvidencePreviewController extends Component {
       dayIndex: fromDay,
     });
     this.campaignDayCompletionPending = false;
+    if (isFinalDay) {
+      this.campaignDayContinueRequested = false;
+      this.updateGuidanceButtonInteractivity();
+      await this.prepareDay0EndingResources();
+      this.enterDay0EndingDisplayTestMode();
+      return;
+    }
 
     const transitioned = await this.beginCampaignDayTransition();
     if (transitioned) {
       this.campaignDayContinueRequested = false;
+      this.updateGuidanceButtonInteractivity();
       return;
     }
     this.logCampaignTransitionFailure('continue-requested-transition-failed', {
@@ -10488,15 +13476,29 @@ export class EvidencePreviewController extends Component {
     }
     this.telephoneController?.closeEmergencyPhone();
     this.telephoneController?.setEmergencyInputEnabled(false);
-    this.telephoneController?.setTelephoneEntryEnabled(false);
+    this.setTelephoneEntryEnabledForInteractionTrace(false, 'day-transition-clear-transient');
     this.telephoneController?.setEmergencyAccessOverride(false);
     this.shutterController?.stopShutterImpactLoop();
     this.shutterController?.restoreNormalVisual();
-    this.shutterController?.setInteractionEnabled(false);
+    this.setShutterInteractionEnabledForInteractionTrace(false, 'day-transition-clear-transient');
     this.emergencyTelephoneOverrideActive = false;
     this.clearReviveCheckpoint();
     this.resetInspectionRoundForNextSubject();
     this.resetChecklistState();
+  }
+
+  private clearActiveInspectionSubjectForDayTransition(): void {
+    const activeSubject = this.currentInspectionSubject;
+    if (activeSubject?.subjectKind === 'visitor') {
+      const departed = this.completeActiveVisitorNonCombatDeparture(activeSubject.roundId);
+      if (!departed) {
+        throw new Error(
+          '[DayTransition] Failed to complete active visitor departure before generating next day.',
+        );
+      }
+      return;
+    }
+    this.setCurrentRoundAndSyncSubject(null);
   }
 
   private async beginCampaignDayTransition(): Promise<boolean> {
@@ -10515,8 +13517,16 @@ export class EvidencePreviewController extends Component {
     this.dayCompletionOverlayController?.hide();
     this.shiftClockController?.pause();
     this.clearDayTransitionTransientState();
-    this.setManagedButtonsInteractable(false);
-    this.lockAllEncounterInput();
+    // Clear any active subject at the day boundary before next-day generation.
+    this.clearActiveInspectionSubjectForDayTransition();
+    if (this.currentInspectionSubject !== null) {
+      throw new Error('[DayTransition] Active inspection subject was not cleared before next-day generation.');
+    }
+    if (this.currentRound !== null) {
+      throw new Error('[DayTransition] Active employee round was not cleared before next-day generation.');
+    }
+    this.setManagedButtonsInteractable(false, 'day-transition-lock');
+    this.lockAllEncounterInput('day-transition-lock');
     if (isLastImplementedCampaignDay(fromDay)) {
       this.completeImplementedCampaignContent();
       return false;
@@ -10531,9 +13541,10 @@ export class EvidencePreviewController extends Component {
         return false;
       }
       this.activeDayConfig = nextDayConfig;
+      this.recordDayStartDecisionErrorBaseline('day-transition');
       this.resetActiveDayQueueState();
       this.applyCampaignConfigurationToControllers();
-      this.refreshCampaignEvidenceAvailability();
+      this.refreshCampaignEvidenceAvailability('day-transition');
       this.resetChecklistState();
       this.configureCampaignShiftClock(nextDayConfig);
       if (nextDayConfig.dayIndex === 4) {
@@ -10583,7 +13594,7 @@ export class EvidencePreviewController extends Component {
         });
         return false;
       }
-      this.setManagedButtonsInteractable(false);
+      this.setManagedButtonsInteractable(false, 'day-transition-subject-load-lock');
       const introResult = await this.playIntroForActiveSubject();
       if (!introResult.ok) {
         this.logCampaignTransitionFailure('play-first-intro-failed', {
@@ -10607,6 +13618,7 @@ export class EvidencePreviewController extends Component {
         encounterNumber: 1,
         totalEncounters: this.activeDayQueue?.rounds.length ?? 0,
       });
+      this.logInteractionStateSnapshot('day-transition-complete');
       return true;
     } catch (error) {
       this.logCampaignTransitionFailure('day-transition-exception', {
@@ -10625,6 +13637,7 @@ export class EvidencePreviewController extends Component {
     } finally {
       if (!this.campaignImplementedContentComplete) {
         this.campaignDayTransitionInProgress = false;
+        this.updateGuidanceButtonInteractivity();
       }
     }
   }
@@ -10684,25 +13697,26 @@ export class EvidencePreviewController extends Component {
     this.clearDayTransitionTransientState();
     this.resetActiveDayQueueState();
     this.setCurrentRoundAndSyncSubject(null);
-    this.setManagedButtonsInteractable(false);
-    this.lockAllEncounterInput();
+    this.setManagedButtonsInteractable(false, 'campaign-content-complete-lock');
+    this.lockAllEncounterInput('campaign-content-complete-lock');
     this.telephoneController?.setEmergencyAccessOverride(false);
-    this.telephoneController?.setTelephoneEntryEnabled(false);
+    this.setTelephoneEntryEnabledForInteractionTrace(false, 'campaign-content-complete-lock');
+    const dayConfig = this.activeDayConfig ?? campaignState.getCurrentDayConfig();
     this.visitorIntroController?.setCampaignShiftCompletionDisplay(
       this.buildCompletionShiftDisplay(snapshot),
     );
-    const dayConfig = this.activeDayConfig ?? campaignState.getCurrentDayConfig();
     const totalEncounters =
       dayConfig.dayIndex === 4 && this.activeDay4VisitorSession
         ? this.activeDay4VisitorSession.rounds.length
         : this.activeDayQueue?.rounds.length ?? dayConfig.encounterCountMax;
+    const currentDayDecisionErrorStats = this.computeCurrentDayDecisionErrorStats();
     const overlayData: DayCompletionOverlayData = {
       dayIndex: dayConfig.dayIndex,
       date: dayConfig.date,
       completedEncounters: totalEncounters,
       totalEncounters,
-      wrongAllowCount: campaignState.getDailyDecisionErrorStats().wrongAllowCount,
-      wrongDenyCount: campaignState.getDailyDecisionErrorStats().wrongDenyCount,
+      wrongAllowCount: currentDayDecisionErrorStats.wrongAllowCount,
+      wrongDenyCount: currentDayDecisionErrorStats.wrongDenyCount,
       mode: 'implemented-content-complete',
     };
     this.dayCompletionOverlayController?.show(overlayData);
@@ -10733,6 +13747,7 @@ export class EvidencePreviewController extends Component {
     this.emergencyWindowOpen = false;
     this.emergencyDeadlineMs = 0;
     this.emergencyShutterSucceeded = false;
+    this.emergencyShutterCloseRequested = false;
     this.carterAttackTriggered = false;
     this.carterEncounterResolved = false;
     this.phoneResponseWindowOpen = false;
@@ -10741,9 +13756,14 @@ export class EvidencePreviewController extends Component {
     this.phoneDialDeadlineMs = 0;
     this.cleanupProgramActivated = false;
     this.phoneEmergencyResolved = false;
+    this.monsterThreatProtectionPhase = 'idle';
+    this.activeMonsterThreatTiming = null;
+    this.closedShutterProtectionGranted = false;
+    this.monsterThreatGeneration += 1;
+    this.emergencyTimeoutGeneration = this.monsterThreatGeneration;
     this.delayedDamagedShutterSwitchScheduled = false;
     this.cleanupTransitionScheduled = false;
-    this.inspectionDecisionResolutionInProgress = false;
+    this.setInspectionDecisionResolutionInProgress(false, 'reset-round-next-subject');
     this.selectedChecklistQuestion = null;
     this.checklistQuestionPanelOpen = false;
     this.checklistReplyContext = 'normal';
@@ -10763,7 +13783,168 @@ export class EvidencePreviewController extends Component {
     this.shutterController?.stopShutterImpactLoop();
     this.emergencyTelephoneOverrideActive = false;
     this.telephoneController?.setEmergencyAccessOverride(false);
-    this.refreshCampaignEvidenceAvailability();
+    this.refreshCampaignEvidenceAvailability('round-reset');
+    this.logMonsterThreatTiming('cancelled reason=reset-inspection-round');
+  }
+
+  private getCurrentInspectionSubjectToken(): string | null {
+    const subject = this.currentInspectionSubject;
+    if (!subject) {
+      return null;
+    }
+    if (subject.subjectKind === 'visitor') {
+      return `visitor:${subject.roundId}:${subject.visitorKey}`;
+    }
+    return `employee:${subject.round.roundId}:${subject.round.employeeKey}`;
+  }
+
+  private isCurrentInspectionSubjectToken(token: string | null): boolean {
+    if (!token) {
+      return false;
+    }
+    return this.getCurrentInspectionSubjectToken() === token;
+  }
+
+  private isIntroFailureExpectedCancellation(reason: string): boolean {
+    const normalized = reason.toLowerCase();
+    return (
+      normalized.includes('cancel') ||
+      normalized.includes('stale') ||
+      normalized.includes('superseded') ||
+      normalized.includes('destroy') ||
+      normalized.includes('duplicate') ||
+      normalized.includes('invalid_round_context')
+    );
+  }
+
+  private logSubjectIntroTrace(
+    event: string,
+    payload: Record<string, string | number | boolean | null>,
+  ): void {
+    const segments: string[] = [`[SubjectIntroTrace] ${event}`];
+    for (const [key, value] of Object.entries(payload)) {
+      segments.push(`${key}=${String(value)}`);
+    }
+    console.info(segments.join(' '));
+  }
+
+  private resolveIntroRestoreBlockedReason(
+    subjectTokenAtIntroStart: string | null,
+    reason: string,
+  ): string | null {
+    if (!this.node?.isValid) {
+      return 'controller-disabled';
+    }
+    if (this.isDestroying) {
+      return 'destroying';
+    }
+    if (!this.isCurrentInspectionSubjectToken(subjectTokenAtIntroStart)) {
+      return 'stale-subject-token';
+    }
+    if (!this.currentInspectionSubject) {
+      return 'missing-subject';
+    }
+    if (
+      this.campaignDayTransitionInProgress ||
+      this.campaignDayCompletionPending ||
+      this.campaignDayContinueRequested ||
+      this.campaignImplementedContentComplete
+    ) {
+      return 'day-transition';
+    }
+    if (this.failureReviewActive) {
+      return 'failure-review';
+    }
+    if (this.isGameOverStateActive()) {
+      return 'game-over';
+    }
+    if (this.hasActiveThreatOrEmergencyFlow()) {
+      return 'monster-threat';
+    }
+    if (this.isIntroFailureExpectedCancellation(reason)) {
+      return 'expected-cancellation';
+    }
+    return null;
+  }
+
+  private canRestoreRegularInspectionInteractionAfterIntroFailure(
+    subjectTokenAtIntroStart: string | null,
+    reason: string,
+  ): boolean {
+    return this.resolveIntroRestoreBlockedReason(subjectTokenAtIntroStart, reason) === null;
+  }
+
+  private completeIntroAndEnableInspectionInteraction(
+    unlockReason: 'intro-success-unlock' | 'intro-failure-unlock' = 'intro-success-unlock',
+  ): void {
+    this.logDay4DocumentRuntimeState('intro-complete-entry', 'completeIntroAndEnableInspectionInteraction');
+    this.logInteractionTrace('unlock-regular-interaction', {
+      reason: unlockReason,
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+    });
+    this.setInspectionDecisionResolutionInProgress(false, 'intro-success');
+    this.setManagedButtonsInteractable(true, 'intro-success-unlock');
+    this.logDay4DocumentRuntimeState(
+      'intro-complete-after-setManagedButtonsInteractable-true',
+      'completeIntroAndEnableInspectionInteraction',
+    );
+    this.setTelephoneEntryEnabledForInteractionTrace(true, 'intro-success-unlock');
+    this.refreshCampaignEvidenceAvailability('intro-complete-refresh');
+    this.logDay4DocumentRuntimeState(
+      'intro-complete-after-refreshCampaignEvidenceAvailability',
+      'completeIntroAndEnableInspectionInteraction',
+    );
+    this.setShutterInteractionEnabledForInteractionTrace(true, 'intro-success-unlock');
+    this.updateGuidanceButtonInteractivity();
+    this.startCampaignShiftClockIfNeeded();
+    this.logInteractionStateSnapshot('intro-enable-interaction-complete');
+    this.logInteractionStateSnapshot('entered-regular-inspection-state');
+  }
+
+  private restoreRegularInspectionInteractionAfterIntroFailure(
+    reason: string,
+    subjectTokenAtIntroStart: string | null,
+  ): void {
+    const canRestore = this.canRestoreRegularInspectionInteractionAfterIntroFailure(
+      subjectTokenAtIntroStart,
+      reason,
+    );
+    if (!canRestore) {
+      const blockedReason =
+        this.resolveIntroRestoreBlockedReason(subjectTokenAtIntroStart, reason) ?? 'unknown';
+      if (blockedReason === 'expected-cancellation') {
+        this.logSubjectIntroTrace('ignored-cancellation', {
+          reason,
+          blockedReason,
+          day: this.getActiveCampaignDayIndex(),
+          subject: this.getActiveSubjectKeyForInteractionTrace(),
+          generation: this.decisionResolutionToken,
+        });
+      } else {
+        this.logSubjectIntroTrace('restore-blocked', {
+          reason: blockedReason,
+          introFailureReason: reason,
+          day: this.getActiveCampaignDayIndex(),
+          subject: this.getActiveSubjectKeyForInteractionTrace(),
+          generation: this.decisionResolutionToken,
+        });
+      }
+      return;
+    }
+    this.logSubjectIntroTrace('enabling-interaction', {
+      mode: 'failure-fallback',
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+    });
+    this.completeIntroAndEnableInspectionInteraction('intro-failure-unlock');
+    console.warn('[EvidencePreviewController] intro failed; restored regular inspection interaction.', {
+      reason,
+      subjectToken: subjectTokenAtIntroStart,
+    });
+    this.logInteractionStateSnapshot('intro-failure-fallback-restored');
   }
 
   private recordDailyDecisionErrorFromOutcome(outcome: InspectionDecisionOutcome): void {
@@ -10901,12 +14082,42 @@ export class EvidencePreviewController extends Component {
   }
 
   private async playIntroForActiveSubject(): Promise<VisitorIntroResult> {
+    const subjectTokenAtIntroStart = this.getCurrentInspectionSubjectToken();
+    this.logSubjectIntroTrace('start', {
+      day: this.getActiveCampaignDayIndex(),
+      subject: this.getActiveSubjectKeyForInteractionTrace(),
+      generation: this.decisionResolutionToken,
+    });
+    this.logInteractionStateSnapshot('intro-before-start');
+    this.logDay4DocumentRuntimeState('intro-before-start', 'playIntroForActiveSubject');
     if (!this.visitorIntroController) {
-      return { ok: false, reason: 'visitor_intro_controller_missing' };
+      const failedResult = { ok: false, reason: 'visitor_intro_controller_missing' } as const;
+      this.logSubjectIntroTrace('failed', {
+        reason: failedResult.reason,
+        day: this.getActiveCampaignDayIndex(),
+        subject: this.getActiveSubjectKeyForInteractionTrace(),
+        generation: this.decisionResolutionToken,
+      });
+      this.restoreRegularInspectionInteractionAfterIntroFailure(
+        failedResult.reason,
+        subjectTokenAtIntroStart,
+      );
+      return failedResult;
     }
     const def = this.getActiveInspectionSubjectDefinition();
     if (!def) {
-      return { ok: false, reason: 'active_subject_definition_missing' };
+      const failedResult = { ok: false, reason: 'active_subject_definition_missing' } as const;
+      this.logSubjectIntroTrace('failed', {
+        reason: failedResult.reason,
+        day: this.getActiveCampaignDayIndex(),
+        subject: this.getActiveSubjectKeyForInteractionTrace(),
+        generation: this.decisionResolutionToken,
+      });
+      this.restoreRegularInspectionInteractionAfterIntroFailure(
+        failedResult.reason,
+        subjectTokenAtIntroStart,
+      );
+      return failedResult;
     }
     this.visitorIntroController.setCampaignDocumentDeliveryAvailability({
       employeeCardEnabled: this.isCampaignEvidenceEnabled('employee-card'),
@@ -10915,21 +14126,46 @@ export class EvidencePreviewController extends Component {
     if (this.currentInspectionSubject?.subjectKind === 'visitor') {
       this.appointmentRosterController?.setCampaignEnabled(false);
       this.telephoneController?.setCampaignRegularAccessEnabled(false);
-      this.telephoneController?.setTelephoneEntryEnabled(false);
+      this.setTelephoneEntryEnabledForInteractionTrace(false, 'visitor-intro-visitor-subject');
     }
     const prepared = this.visitorIntroController.prepareInspectionSubject(def.characterDisguisedFrame);
     if (!prepared) {
-      return { ok: false, reason: 'prepare_inspection_subject_failed' };
+      const failedResult = { ok: false, reason: 'prepare_inspection_subject_failed' } as const;
+      this.logSubjectIntroTrace('failed', {
+        reason: failedResult.reason,
+        day: this.getActiveCampaignDayIndex(),
+        subject: this.getActiveSubjectKeyForInteractionTrace(),
+        generation: this.decisionResolutionToken,
+      });
+      this.restoreRegularInspectionInteractionAfterIntroFailure(
+        failedResult.reason,
+        subjectTokenAtIntroStart,
+      );
+      return failedResult;
     }
 
     const context = this.buildVisitorIntroRunContext();
     this.logRoundBootstrap('intro request');
+    this.logInteractionStateSnapshot('intro-before-await');
+    this.logDay4DocumentRuntimeState('intro-before-playForInspectionSubject', 'playIntroForActiveSubject');
     try {
       const result = await this.visitorIntroController.playForInspectionSubject(context, () => {
         this.logRoundBootstrap('intro accepted');
       });
+      this.logInteractionStateSnapshot('intro-promise-complete');
+      this.logDay4DocumentRuntimeState('intro-delivery-complete', 'playIntroForActiveSubject');
       if (!result.ok) {
         console.error('[EvidencePreviewController] Visitor intro blocked.', result);
+        this.logSubjectIntroTrace('failed', {
+          reason: result.reason,
+          day: this.getActiveCampaignDayIndex(),
+          subject: this.getActiveSubjectKeyForInteractionTrace(),
+          generation: this.decisionResolutionToken,
+        });
+        this.restoreRegularInspectionInteractionAfterIntroFailure(
+          result.reason,
+          subjectTokenAtIntroStart,
+        );
         return result;
       }
       if (this.currentInspectionSubject?.subjectKind === 'visitor') {
@@ -10938,7 +14174,18 @@ export class EvidencePreviewController extends Component {
         const departmentName = getAppointmentDepartmentSpokenDisplayName(round.claim.claimedDepartmentKey);
         const purposeReason = getAppointmentPurposeSpokenVisitReason(round.claim.claimedPurposeKey);
         if (!visitorProfile || !departmentName || !purposeReason) {
-          return { ok: false, reason: 'visitor_claim_resolution_failed' };
+          const failedResult = { ok: false, reason: 'visitor_claim_resolution_failed' } as const;
+          this.logSubjectIntroTrace('failed', {
+            reason: failedResult.reason,
+            day: this.getActiveCampaignDayIndex(),
+            subject: this.getActiveSubjectKeyForInteractionTrace(),
+            generation: this.decisionResolutionToken,
+          });
+          this.restoreRegularInspectionInteractionAfterIntroFailure(
+            failedResult.reason,
+            subjectTokenAtIntroStart,
+          );
+          return failedResult;
         }
         const claimDialogue = resolveVisitorClaimDialogue(round, {
           claimedVisitorKey: round.claim.claimedVisitorKey,
@@ -10948,25 +14195,61 @@ export class EvidencePreviewController extends Component {
           claimedPurposeKey: round.claim.claimedPurposeKey,
           claimedPurposeSpokenVisitReason: purposeReason,
         });
+        this.logDay4DocumentRuntimeState('visitor-claim-dialogue-start', 'playIntroForActiveSubject');
         const claimResult = await this.visitorIntroController.playVisitorClaimSequence({
           roundId: round.roundId,
           dialogue: claimDialogue,
         });
+        this.logDay4DocumentRuntimeState('visitor-claim-dialogue-end', 'playIntroForActiveSubject');
         if (!claimResult.ok) {
-          return { ok: false, reason: `visitor_claim_sequence_${claimResult.reason}` };
+          const failedResult = { ok: false, reason: `visitor_claim_sequence_${claimResult.reason}` } as const;
+          this.logSubjectIntroTrace('failed', {
+            reason: failedResult.reason,
+            day: this.getActiveCampaignDayIndex(),
+            subject: this.getActiveSubjectKeyForInteractionTrace(),
+            generation: this.decisionResolutionToken,
+          });
+          this.restoreRegularInspectionInteractionAfterIntroFailure(
+            failedResult.reason,
+            subjectTokenAtIntroStart,
+          );
+          return failedResult;
         }
       }
       this.logRoundBootstrap('intro completed');
-      this.inspectionDecisionResolutionInProgress = false;
-      this.setManagedButtonsInteractable(true);
-      this.telephoneController?.setTelephoneEntryEnabled(true);
-      this.refreshCampaignEvidenceAvailability();
-      this.shutterController?.setInteractionEnabled(true);
-      this.startCampaignShiftClockIfNeeded();
+      this.logSubjectIntroTrace('success', {
+        day: this.getActiveCampaignDayIndex(),
+        subject: this.getActiveSubjectKeyForInteractionTrace(),
+        generation: this.decisionResolutionToken,
+      });
+      this.logSubjectIntroTrace('enabling-interaction', {
+        mode: 'success',
+        day: this.getActiveCampaignDayIndex(),
+        subject: this.getActiveSubjectKeyForInteractionTrace(),
+        generation: this.decisionResolutionToken,
+      });
+      this.logDay4DocumentRuntimeState(
+        'before-completeIntroAndEnableInspectionInteraction',
+        'playIntroForActiveSubject',
+      );
+      this.completeIntroAndEnableInspectionInteraction();
+      this.logDay4DocumentRuntimeState('playIntro-return-before', 'playIntroForActiveSubject');
       return result;
     } catch (error) {
       console.error('[EvidencePreviewController] Visitor intro threw an error.', error);
-      return { ok: false, reason: 'visitor_intro_runtime_exception' };
+      const failedResult = { ok: false, reason: 'visitor_intro_runtime_exception' } as const;
+      this.logInteractionStateSnapshot('intro-promise-complete');
+      this.logSubjectIntroTrace('failed', {
+        reason: failedResult.reason,
+        day: this.getActiveCampaignDayIndex(),
+        subject: this.getActiveSubjectKeyForInteractionTrace(),
+        generation: this.decisionResolutionToken,
+      });
+      this.restoreRegularInspectionInteractionAfterIntroFailure(
+        failedResult.reason,
+        subjectTokenAtIntroStart,
+      );
+      return failedResult;
     }
   }
 

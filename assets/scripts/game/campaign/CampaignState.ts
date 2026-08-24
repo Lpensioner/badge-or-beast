@@ -128,8 +128,6 @@ export class CampaignStateStore {
       this.day4VisitorSession = null;
     }
     this.currentDayIndex = (this.currentDayIndex + 1) as CampaignDayIndex;
-    this.resetDailyDecisionErrorStats();
-    this.resetWronglyAllowedMonsters();
     return this.getCurrentDayConfig();
   }
 

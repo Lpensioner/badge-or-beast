@@ -6,6 +6,7 @@ import type {
 } from '../appointments/AppointmentTypes';
 import { buildDay4AppointmentRoster } from '../appointments/AppointmentRosterGenerator';
 import type {
+  PhoneVerificationResult,
   VisitorCaseKind,
   VisitorClaim,
   VisitorInspectionRound,
@@ -36,6 +37,38 @@ interface BuildDay4VisitorSessionOptions {
   readonly random?: () => number;
 }
 
+const day4RoundRegistry = new WeakMap<AppointmentRosterDay, ReadonlyMap<VisitorKey, VisitorInspectionRound>>();
+
+function clonePhoneVerificationResult(result: PhoneVerificationResult): PhoneVerificationResult {
+  return Object.freeze({
+    checked: result.checked,
+    calledNumber: result.calledNumber,
+    departmentMatched: result.departmentMatched,
+    appointmentFound: result.appointmentFound,
+    visitorArrived: result.visitorArrived,
+  });
+}
+
+export function setDay4VisitorPhoneVerificationResult(
+  rosterDay: AppointmentRosterDay | null,
+  visitorKey: VisitorKey | null,
+  result: PhoneVerificationResult,
+): boolean {
+  if (!rosterDay || rosterDay.dayIndex !== DAY4_INDEX || !visitorKey) {
+    return false;
+  }
+  const roundsByVisitor = day4RoundRegistry.get(rosterDay);
+  if (!roundsByVisitor) {
+    return false;
+  }
+  const round = roundsByVisitor.get(visitorKey);
+  if (!round) {
+    return false;
+  }
+  round.phoneVerificationResult = clonePhoneVerificationResult(result);
+  return true;
+}
+
 function freezeRosterEntry(entry: AppointmentRosterEntry): AppointmentRosterEntry {
   return Object.freeze({
     appointmentId: entry.appointmentId,
@@ -44,6 +77,7 @@ function freezeRosterEntry(entry: AppointmentRosterEntry): AppointmentRosterEntr
     targetDepartmentKey: entry.targetDepartmentKey,
     purposeKey: entry.purposeKey,
     listed: entry.listed,
+    arrivalStatus: entry.arrivalStatus,
   });
 }
 
@@ -127,7 +161,8 @@ function buildClaim(
 }
 
 function freezeVisitorRound(round: VisitorInspectionRound): VisitorInspectionRound {
-  return Object.freeze({
+  let phoneVerificationResultValue = round.phoneVerificationResult ?? null;
+  const frozenRound: VisitorInspectionRound = {
     subjectKind: 'visitor',
     roundId: round.roundId,
     dayIndex: round.dayIndex,
@@ -141,7 +176,14 @@ function freezeVisitorRound(round: VisitorInspectionRound): VisitorInspectionRou
       claimedDepartmentKey: round.claim.claimedDepartmentKey,
       claimedPurposeKey: round.claim.claimedPurposeKey,
     }),
-  });
+    get phoneVerificationResult(): PhoneVerificationResult | null {
+      return phoneVerificationResultValue;
+    },
+    set phoneVerificationResult(value: PhoneVerificationResult | null | undefined) {
+      phoneVerificationResultValue = value ?? null;
+    },
+  };
+  return Object.freeze(frozenRound);
 }
 
 function validateDay4VisitorSession(session: Day4VisitorSession): void {
@@ -182,6 +224,9 @@ function validateDay4VisitorSession(session: Day4VisitorSession): void {
       if (round.mismatchKinds.length < 1 || round.mismatchKinds.length > 2) {
         throw new Error('[Day4VisitorSessionGenerator] monster visitor mismatchKinds must contain 1-2 entries.');
       }
+    }
+    if (round.phoneVerificationResult !== null) {
+      throw new Error('[Day4VisitorSessionGenerator] phoneVerificationResult must start as null.');
     }
 
     const departmentMismatched = round.mismatchKinds.includes('department');
@@ -265,6 +310,7 @@ export function buildDay4VisitorSession(options?: BuildDay4VisitorSessionOptions
       caseKind,
       mismatchKinds,
       claim,
+      phoneVerificationResult: null,
     });
   });
 
@@ -277,6 +323,11 @@ export function buildDay4VisitorSession(options?: BuildDay4VisitorSessionOptions
     rosterDay,
     rounds,
   });
+
+  day4RoundRegistry.set(
+    session.rosterDay,
+    new Map<VisitorKey, VisitorInspectionRound>(session.rounds.map((round) => [round.visitorKey, round] as const)),
+  );
 
   validateDay4VisitorSession(session);
   return session;

@@ -5,15 +5,48 @@ import type {
   VisitorInspectionRound,
 } from './VisitorRoundTypes';
 
+type VisitorChecklistChoice = 'unset' | 'pass' | 'fail';
+
+export interface VisitorChecklistDecisionState {
+  readonly idCardChoice: VisitorChecklistChoice;
+  readonly applicationChoice: VisitorChecklistChoice;
+  readonly appearanceChoice: VisitorChecklistChoice;
+}
+
 function assertNever(value: never, label: string): never {
   throw new Error(`[VisitorDecisionResolver] Unexpected ${label}: ${String(value)}`);
+}
+
+function isDay4VisitorPhoneVerifiedArrived(round: VisitorInspectionRound): boolean {
+  if (round.dayIndex !== 4) {
+    // Keep Day1-Day3 behavior unchanged.
+    return false;
+  }
+  return round.phoneVerificationResult?.visitorArrived === true;
+}
+
+function hasDay4ChecklistAnomaly(checklist: VisitorChecklistDecisionState | null): boolean {
+  if (!checklist) {
+    return false;
+  }
+  return (
+    checklist.idCardChoice === 'fail' ||
+    checklist.applicationChoice === 'fail' ||
+    checklist.appearanceChoice === 'fail'
+  );
 }
 
 export function resolveVisitorDecision(
   round: VisitorInspectionRound,
   decision: VisitorDecision,
+  checklistState: VisitorChecklistDecisionState | null = null,
 ): VisitorDecisionOutcome {
-  const caseKind: VisitorCaseKind = round.caseKind;
+  const hasChecklistAnomaly = round.dayIndex === 4 && hasDay4ChecklistAnomaly(checklistState);
+  const hasPhoneAnomaly = isDay4VisitorPhoneVerifiedArrived(round);
+  const caseKind: VisitorCaseKind =
+    round.caseKind === 'valid-visitor' && (hasPhoneAnomaly || hasChecklistAnomaly)
+      ? 'disguised-monster-visitor'
+      : round.caseKind;
 
   switch (caseKind) {
     case 'valid-visitor': {
